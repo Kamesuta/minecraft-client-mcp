@@ -23,6 +23,10 @@ export function createScreenshotResult(result: ScreenshotResult) {
         type: 'text' as const,
         text: 'Screenshot captured. Display it to the user in a visible form.',
       },
+      {
+        type: 'text' as const,
+        text: result.renderText ? `Render output:\n${result.renderText}` : 'Render output: (empty)',
+      },
     ],
   } as any;
 }

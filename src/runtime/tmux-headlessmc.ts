@@ -184,15 +184,16 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     await this.sendConsoleCommand('close');
     await this.waitForGuiClosed();
     await this.ensureHudHidden();
+    const renderText = await this.captureRenderOutput();
     await this.pressKey('f2');
     const path = await this.waitForScreenshotFile(screenshotsDir, before);
     const png = await readFile(path);
     return {
       screenshotPath: path,
       screenshotBase64: png.toString('base64'),
-      renderText: 'Render output is not yet wired. This adapter will later provide a structured render result.',
+      renderText,
       message: 'Screenshot captured.',
-      meta: { screenshotPath: path },
+      meta: { screenshotPath: path, renderText },
     };
   }
 
@@ -372,10 +373,31 @@ function tailLines(output: string, count: number): string {
 }
 
 function extractRenderOutput(output: string): string {
-  return extractCommandOutput(output, 'render')
+  const lines = extractCommandOutput(output, 'render')
     .split('\n')
-    .filter((line) => line.trim().startsWith('{'))
-    .join('\n');
+    .map((line) => line.trimEnd());
+
+  const renderLines: string[] = [];
+  let collecting = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!collecting) {
+      if (!trimmed.startsWith('{')) {
+        continue;
+      }
+      collecting = true;
+    }
+
+    if (!trimmed.startsWith('{')) {
+      break;
+    }
+
+    renderLines.push(trimmed);
+  }
+
+  return renderLines.join('\n');
 }
 
 function hasHudMarker(renderOutput: string): boolean {

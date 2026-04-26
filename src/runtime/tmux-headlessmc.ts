@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -15,6 +15,8 @@ type Options = {
 const CONNECT_TIMEOUT_MS = 20_000;
 const CONNECT_POLL_INTERVAL_MS = 500;
 const CONNECT_LOG_LINES = 400;
+const SCREENSHOT_TIMEOUT_MS = 10_000;
+const SCREENSHOT_POLL_INTERVAL_MS = 250;
 
 const CONNECT_SUCCESS_PATTERNS = [
   /\bjoined the game\b/i,
@@ -62,30 +64,32 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
   async connect(ip: string): Promise<RuntimeResult> {
     const before = await this.capturePane(CONNECT_LOG_LINES);
-    await this.sendKeys(`connect ${ip}`);
+    await this.sendConsoleCommand(`connect ${ip}`);
     return this.waitForConnectResult(ip, before);
   }
 
   async viewAs(player: string): Promise<ScreenshotResult> {
-    await this.sendKeys(`spectate ${player}`);
-    await this.sendKeys('F1');
-    return this.captureScreenshot(`view_as_${safeName(player)}`);
+    await this.sendChatCommand(`spectate ${player}`);
+    return this.captureScreenshot();
   }
 
   async viewAt(target: { x: number; y: number; z: number; yaw: number; pitch: number }): Promise<ScreenshotResult> {
     const { x, y, z, yaw, pitch } = target;
-    await this.sendKeys(`tp @p ${x} ${y} ${z} ${yaw} ${pitch}`);
-    await this.sendKeys('F1');
-    return this.captureScreenshot(`view_at_${safeName(`${x}_${y}_${z}`)}`);
+    await this.sendChatCommand(`tp @s ${x} ${y} ${z} ${yaw} ${pitch}`);
+    return this.captureScreenshot();
   }
 
   async command(command: string): Promise<RuntimeResult> {
-    await this.sendKeys(command.startsWith('/') ? command.slice(1) : command);
+    if (command.startsWith('/')) {
+      await this.sendChatCommand(command.slice(1));
+    } else {
+      await this.sendConsoleCommand(command);
+    }
     return { message: `Sent command: ${command}`, meta: { command } };
   }
 
   async key(key: string): Promise<RuntimeResult> {
-    await this.sendKeys(key);
+    await this.pressKey(key);
     return { message: `Sent key: ${key}`, meta: { key } };
   }
 
@@ -127,8 +131,16 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     };
   }
 
-  private async sendKeys(keys: string): Promise<void> {
-    await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, keys, 'C-m']);
+  private async sendConsoleCommand(command: string): Promise<void> {
+    await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, command, 'C-m']);
+  }
+
+  private async sendChatCommand(command: string): Promise<void> {
+    await this.sendConsoleCommand(`/${command}`);
+  }
+
+  private async pressKey(key: string): Promise<void> {
+    await this.sendConsoleCommand(`key ${key.toLowerCase()}`);
   }
 
   private async capturePane(lines: number): Promise<string> {
@@ -149,9 +161,11 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     }
   }
 
-  private async captureScreenshot(prefix: string): Promise<ScreenshotResult> {
+  private async captureScreenshot(): Promise<ScreenshotResult> {
     const screenshotsDir = this.options.screenshotsDir ?? join(process.env.HOME ?? '', 'Library/Application Support/minecraft/screenshots');
-    const path = join(screenshotsDir, `${prefix}.png`);
+    const before = await this.listScreenshotFiles(screenshotsDir);
+    await this.pressKey('f2');
+    const path = await this.waitForScreenshotFile(screenshotsDir, before);
     const png = await readFile(path);
     return {
       screenshotPath: path,
@@ -194,10 +208,41 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
       `Timed out waiting for connection to ${ip}. Recent output:\n${recentLog || '(no new output)'}`,
     );
   }
-}
 
-function safeName(input: string): string {
-  return input.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80);
+  private async listScreenshotFiles(screenshotsDir: string): Promise<Map<string, number>> {
+    const entries = await readdir(screenshotsDir, { withFileTypes: true });
+    const files = new Map<string, number>();
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.png')) {
+        continue;
+      }
+
+      const path = join(screenshotsDir, entry.name);
+      const info = await stat(path);
+      files.set(path, info.mtimeMs);
+    }
+
+    return files;
+  }
+
+  private async waitForScreenshotFile(screenshotsDir: string, before: Map<string, number>): Promise<string> {
+    const deadline = Date.now() + SCREENSHOT_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      await sleep(SCREENSHOT_POLL_INTERVAL_MS);
+      const current = await this.listScreenshotFiles(screenshotsDir);
+      const created = [...current.entries()]
+        .filter(([path, mtimeMs]) => !before.has(path) || before.get(path) !== mtimeMs)
+        .sort((a, b) => b[1] - a[1]);
+
+      if (created.length > 0) {
+        return created[0][0];
+      }
+    }
+
+    throw new Error(`Timed out waiting for screenshot in ${screenshotsDir}`);
+  }
 }
 
 function stripSharedPrefix(previous: string, current: string): string {

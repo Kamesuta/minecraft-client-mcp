@@ -17,6 +17,9 @@ const CONNECT_POLL_INTERVAL_MS = 500;
 const CONNECT_LOG_LINES = 400;
 const SCREENSHOT_TIMEOUT_MS = 10_000;
 const SCREENSHOT_POLL_INTERVAL_MS = 250;
+const RENDER_TIMEOUT_MS = 3_000;
+const RENDER_POLL_INTERVAL_MS = 100;
+const HUD_TOGGLE_SETTLE_MS = 150;
 
 const CONNECT_SUCCESS_PATTERNS = [
   /\bjoined the game\b/i,
@@ -37,6 +40,8 @@ const CONNECT_FAILURE_PATTERNS = [
 ];
 
 export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
+  private hudHidden: boolean | null = null;
+
   constructor(private readonly options: Options) {}
 
   async launch(): Promise<RuntimeResult> {
@@ -65,7 +70,15 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   async connect(ip: string): Promise<RuntimeResult> {
     const before = await this.capturePane(CONNECT_LOG_LINES);
     await this.sendConsoleCommand(`connect ${ip}`);
-    return this.waitForConnectResult(ip, before);
+    const result = await this.waitForConnectResult(ip, before);
+    const hudHidden = await this.syncHudHiddenState();
+    return {
+      ...result,
+      meta: {
+        ...result.meta,
+        hudHidden,
+      },
+    };
   }
 
   async viewAs(player: string): Promise<ScreenshotResult> {
@@ -164,6 +177,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   private async captureScreenshot(): Promise<ScreenshotResult> {
     const screenshotsDir = this.options.screenshotsDir ?? join(process.env.HOME ?? '', 'Library/Application Support/minecraft/screenshots');
     const before = await this.listScreenshotFiles(screenshotsDir);
+    await this.ensureHudHidden();
     await this.pressKey('f2');
     const path = await this.waitForScreenshotFile(screenshotsDir, before);
     const png = await readFile(path);
@@ -243,6 +257,57 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
     throw new Error(`Timed out waiting for screenshot in ${screenshotsDir}`);
   }
+
+  private async ensureHudHidden(): Promise<void> {
+    if (this.hudHidden !== false) {
+      return;
+    }
+
+    await this.pressKey('f1');
+    await sleep(HUD_TOGGLE_SETTLE_MS);
+    this.hudHidden = true;
+  }
+
+  private async syncHudHiddenState(): Promise<boolean> {
+    const firstRender = await this.captureRenderAfterKeyToggle('f3');
+    const secondRender = await this.captureRenderAfterKeyToggle('f3');
+    const hudVisible = [firstRender, secondRender].some((render) => hasHudMarker(render));
+
+    if (hudVisible) {
+      await this.pressKey('f1');
+      await sleep(HUD_TOGGLE_SETTLE_MS);
+      this.hudHidden = true;
+      return true;
+    }
+
+    this.hudHidden = true;
+    return true;
+  }
+
+  private async captureRenderAfterKeyToggle(key: string): Promise<string> {
+    await this.pressKey(key);
+    await sleep(HUD_TOGGLE_SETTLE_MS);
+    return this.captureRenderOutput();
+  }
+
+  private async captureRenderOutput(): Promise<string> {
+    const before = await this.capturePane(CONNECT_LOG_LINES);
+    await this.sendConsoleCommand('render');
+    const deadline = Date.now() + RENDER_TIMEOUT_MS;
+    let latest = before;
+
+    while (Date.now() < deadline) {
+      await sleep(RENDER_POLL_INTERVAL_MS);
+      latest = await this.capturePane(CONNECT_LOG_LINES);
+      const delta = stripSharedPrefix(before, latest);
+      const renderOutput = extractRenderOutput(delta);
+      if (renderOutput) {
+        return renderOutput;
+      }
+    }
+
+    throw new Error(`Timed out waiting for render output. Recent output:\n${tailLines(latest, 20)}`);
+  }
 }
 
 function stripSharedPrefix(previous: string, current: string): string {
@@ -274,6 +339,26 @@ function tailLines(output: string, count: number): string {
     .filter(Boolean)
     .slice(-count)
     .join('\n');
+}
+
+function extractRenderOutput(output: string): string {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trimEnd());
+
+  const renderIndex = lines.findIndex((line) => line.trim() === 'render');
+  if (renderIndex === -1) {
+    return '';
+  }
+
+  return lines
+    .slice(renderIndex + 1)
+    .filter((line) => line.trim().startsWith('{'))
+    .join('\n');
+}
+
+function hasHudMarker(renderOutput: string): boolean {
+  return renderOutput.includes('XYZ:') || renderOutput.includes('Minecraft ');
 }
 
 function sleep(ms: number): Promise<void> {

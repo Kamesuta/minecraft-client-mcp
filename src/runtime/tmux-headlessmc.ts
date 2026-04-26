@@ -82,12 +82,14 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   async viewAs(player: string): Promise<ScreenshotResult> {
+    await this.sendChatCommand('gamemode spectator');
     await this.sendChatCommand(`spectate ${player}`);
     return this.captureScreenshot();
   }
 
   async viewAt(target: { x: number; y: number; z: number; yaw: number; pitch: number }): Promise<ScreenshotResult> {
     const { x, y, z, yaw, pitch } = target;
+    await this.sendChatCommand('gamemode spectator');
     await this.sendChatCommand(`tp @s ${x} ${y} ${z} ${yaw} ${pitch}`);
     return this.captureScreenshot();
   }

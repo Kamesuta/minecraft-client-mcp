@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "launch": "sh -lc 'tmux has-session -t mc-mcp 2>/dev/null || tmux new -d -s mc-mcp \"npm run dev\"'",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "tsc -p tsconfig.json --noEmit"

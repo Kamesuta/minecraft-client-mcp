@@ -12,6 +12,13 @@ This is the initial implementation scaffold. It is intentionally split into:
 
 That separation is meant to make a later Docker backend swap easier.
 
+## tmux model
+
+- Never attach to the HeadlessMC tmux session from MCP.
+- Reuse an existing session if present.
+- Otherwise create it detached.
+- Use tmux capture-pane for logs and tmux send-keys for interaction.
+
 ## Run
 
 ```bash
@@ -26,3 +33,12 @@ npm run dev
 - `HMC_TMUX_SESSION` (default `hmc`)
 - `HMC_LAUNCHER_COMMAND`
 - `HMC_SCREENSHOTS_DIR`
+
+## Tools
+
+- `hmc_launch` — reuse or start the session detached
+- `hmc_logs` — read recent tmux scrollback
+- `hmc_connect` — send a connect command
+- `hmc_command` — send a raw command
+- `hmc_key` — send a raw key
+- `hmc_view_as` / `hmc_view_at` — capture screenshots

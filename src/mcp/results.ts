@@ -5,10 +5,9 @@ export function createTextResult(text: string, meta?: Record<string, unknown>) {
     content: [
       {
         type: 'text' as const,
-        text,
+        text: meta ? `${text}\n${JSON.stringify(meta)}` : text,
       },
     ],
-    meta,
   } as any;
 }
 
@@ -25,10 +24,5 @@ export function createScreenshotResult(result: ScreenshotResult) {
         text: 'Screenshot captured. Display it to the user in a visible form.',
       },
     ],
-    meta: {
-      screenshotPath: result.screenshotPath,
-      renderText: result.renderText,
-      ...result.meta,
-    },
   } as any;
 }

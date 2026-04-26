@@ -18,10 +18,21 @@ const runtime = new TmuxHeadlessMcAdapter({
 server.addTool({
   name: 'hmc_launch',
   description:
-    'Launch or attach to the HeadlessMC client runtime. Use this before any other hmc_* tool if the Minecraft client may not already be running. This tool is safe to call more than once when backed by a persistent tmux session. Recommended first step for a fresh session, after a reboot, or after any runtime failure.',
+    'Launch or reuse the HeadlessMC client runtime without attaching to tmux. Use this before any other hmc_* tool if the Minecraft client may not already be running. This tool is safe to call more than once when backed by a persistent tmux session. Recommended first step for a fresh session, after a reboot, or after any runtime failure.',
   parameters: z.object({}),
   execute: async () => {
     const result = await runtime.launch();
+    return createTextResult(result.message, result.meta);
+  },
+});
+
+server.addTool({
+  name: 'hmc_logs',
+  description:
+    'Read recent HeadlessMC output from the tmux scrollback without attaching to the session. Use this to inspect launcher output, disconnects, or runtime errors.',
+  parameters: z.object({ lines: z.number().int().positive().max(2000).default(120) }),
+  execute: async ({ lines }) => {
+    const result = await runtime.logs(lines);
     return createTextResult(result.message, result.meta);
   },
 });

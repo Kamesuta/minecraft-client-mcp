@@ -12,8 +12,5 @@ export function createBatchResult(result: BatchResult) {
         text: JSON.stringify(result.results, null, 2),
       },
     ],
-    meta: {
-      results: result.results,
-    },
   } as any;
 }

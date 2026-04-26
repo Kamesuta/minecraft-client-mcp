@@ -16,9 +16,26 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   constructor(private readonly options: Options) {}
 
   async launch(): Promise<RuntimeResult> {
-    const cmd = this.options.launcherCommand ?? "zsh -lic 'java -jar \"$HOME/headlessmc.jar\"'";
-    await execFileAsync('tmux', ['new-session', '-Ad', '-s', this.options.sessionName, cmd]);
-    return { message: `Launched tmux session ${this.options.sessionName}` };
+    const cmd = this.options.launcherCommand ?? 'java -jar "$HOME/headlessmc.jar"';
+    const exists = await this.hasSession();
+    if (exists) {
+      return { message: `Using existing tmux session ${this.options.sessionName}` };
+    }
+
+    await execFileAsync('tmux', ['new-session', '-d', '-s', this.options.sessionName, 'zsh', '-lc', cmd]);
+    return { message: `Launched detached tmux session ${this.options.sessionName}` };
+  }
+
+  async logs(lines = 30): Promise<RuntimeResult> {
+    const args = ['capture-pane', '-t', `${this.options.sessionName}:0`, '-p'];
+    if (lines > 0) {
+      args.push('-S', `-${lines}`);
+    }
+    const { stdout } = await execFileAsync('tmux', args);
+    return {
+      message: stdout.trimEnd() || '(no output)',
+      meta: { sessionName: this.options.sessionName, lines },
+    };
   }
 
   async connect(ip: string): Promise<RuntimeResult> {
@@ -89,6 +106,15 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
   private async sendKeys(keys: string): Promise<void> {
     await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, keys, 'C-m']);
+  }
+
+  private async hasSession(): Promise<boolean> {
+    try {
+      await execFileAsync('tmux', ['has-session', '-t', this.options.sessionName]);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async captureScreenshot(prefix: string): Promise<ScreenshotResult> {

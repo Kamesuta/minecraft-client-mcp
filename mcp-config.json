@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "unityMCP": {
+      "type": "streamable-http",
+      "url": "http://kamesuta-mac.tail2dfeb3.ts.net:3000/mcp"
+    }
+  }
+}

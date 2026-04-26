@@ -20,6 +20,8 @@ const SCREENSHOT_POLL_INTERVAL_MS = 250;
 const RENDER_TIMEOUT_MS = 3_000;
 const RENDER_POLL_INTERVAL_MS = 100;
 const HUD_TOGGLE_SETTLE_MS = 150;
+const GUI_TIMEOUT_MS = 3_000;
+const GUI_POLL_INTERVAL_MS = 100;
 
 const CONNECT_SUCCESS_PATTERNS = [
   /\bjoined the game\b/i,
@@ -179,6 +181,8 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   private async captureScreenshot(): Promise<ScreenshotResult> {
     const screenshotsDir = this.options.screenshotsDir ?? join(process.env.HOME ?? '', 'Library/Application Support/minecraft/screenshots');
     const before = await this.listScreenshotFiles(screenshotsDir);
+    await this.sendConsoleCommand('close');
+    await this.waitForGuiClosed();
     await this.ensureHudHidden();
     await this.pressKey('f2');
     const path = await this.waitForScreenshotFile(screenshotsDir, before);
@@ -310,6 +314,30 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
     throw new Error(`Timed out waiting for render output. Recent output:\n${tailLines(latest, 20)}`);
   }
+
+  private async waitForGuiClosed(): Promise<void> {
+    const deadline = Date.now() + GUI_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      const before = await this.capturePane(CONNECT_LOG_LINES);
+      await this.sendConsoleCommand('gui');
+
+      await sleep(GUI_POLL_INTERVAL_MS);
+
+      const latest = await this.capturePane(CONNECT_LOG_LINES);
+      const delta = stripSharedPrefix(before, latest);
+      const guiOutput = extractCommandOutput(delta, 'gui');
+      if (!guiOutput) {
+        continue;
+      }
+
+      if (guiOutput.includes('Minecraft is currently not displaying a Gui.')) {
+        return;
+      }
+    }
+
+    throw new Error('Timed out waiting for GUI to close.');
+  }
 }
 
 function stripSharedPrefix(previous: string, current: string): string {
@@ -344,23 +372,27 @@ function tailLines(output: string, count: number): string {
 }
 
 function extractRenderOutput(output: string): string {
-  const lines = output
+  return extractCommandOutput(output, 'render')
     .split('\n')
-    .map((line) => line.trimEnd());
-
-  const renderIndex = lines.findIndex((line) => line.trim() === 'render');
-  if (renderIndex === -1) {
-    return '';
-  }
-
-  return lines
-    .slice(renderIndex + 1)
     .filter((line) => line.trim().startsWith('{'))
     .join('\n');
 }
 
 function hasHudMarker(renderOutput: string): boolean {
   return renderOutput.includes('XYZ:') || renderOutput.includes('Minecraft ');
+}
+
+function extractCommandOutput(output: string, command: string): string {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trimEnd());
+
+  const commandIndex = lines.findIndex((line) => line.trim() === command);
+  if (commandIndex === -1) {
+    return '';
+  }
+
+  return lines.slice(commandIndex + 1).join('\n');
 }
 
 function sleep(ms: number): Promise<void> {

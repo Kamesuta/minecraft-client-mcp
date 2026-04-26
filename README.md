@@ -38,7 +38,7 @@ npm run dev
 
 - `hmc_launch` — reuse or start the session detached
 - `hmc_logs` — read recent tmux scrollback
-- `hmc_connect` — send a connect command
+- `hmc_connect` — connect and wait until success or failure is observable in logs
 - `hmc_command` — send a raw command
 - `hmc_key` — send a raw key
 - `hmc_view_as` / `hmc_view_at` — capture screenshots

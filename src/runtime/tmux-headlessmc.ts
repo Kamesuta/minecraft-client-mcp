@@ -12,6 +12,28 @@ type Options = {
   screenshotsDir?: string;
 };
 
+const CONNECT_TIMEOUT_MS = 20_000;
+const CONNECT_POLL_INTERVAL_MS = 500;
+const CONNECT_LOG_LINES = 400;
+
+const CONNECT_SUCCESS_PATTERNS = [
+  /\bjoined the game\b/i,
+  /\bLoaded \d+ advancements\b/i,
+];
+
+const CONNECT_FAILURE_PATTERNS = [
+  /\bFailed to connect to the server\b/i,
+  /\bCouldn't connect to server\b/i,
+  /\bConnection refused\b/i,
+  /\bUnknown host\b/i,
+  /\bDisconnected\b/i,
+  /\bConnection reset\b/i,
+  /\bTimed out\b/i,
+  /\bNetwork is unreachable\b/i,
+  /\bNot authenticated with Minecraft\.net\b/i,
+  /\bInvalid session\b/i,
+];
+
 export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   constructor(private readonly options: Options) {}
 
@@ -39,8 +61,9 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   async connect(ip: string): Promise<RuntimeResult> {
+    const before = await this.capturePane(CONNECT_LOG_LINES);
     await this.sendKeys(`connect ${ip}`);
-    return { message: `Sent connect command to ${ip}`, meta: { ip } };
+    return this.waitForConnectResult(ip, before);
   }
 
   async viewAs(player: string): Promise<ScreenshotResult> {
@@ -108,6 +131,15 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, keys, 'C-m']);
   }
 
+  private async capturePane(lines: number): Promise<string> {
+    const args = ['capture-pane', '-t', `${this.options.sessionName}:0`, '-p'];
+    if (lines > 0) {
+      args.push('-S', `-${lines}`);
+    }
+    const { stdout } = await execFileAsync('tmux', args);
+    return stdout;
+  }
+
   private async hasSession(): Promise<boolean> {
     try {
       await execFileAsync('tmux', ['has-session', '-t', this.options.sessionName]);
@@ -129,8 +161,76 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
       meta: { screenshotPath: path },
     };
   }
+
+  private async waitForConnectResult(ip: string, before: string): Promise<RuntimeResult> {
+    const deadline = Date.now() + CONNECT_TIMEOUT_MS;
+    let latest = before;
+
+    while (Date.now() < deadline) {
+      await sleep(CONNECT_POLL_INTERVAL_MS);
+      latest = await this.capturePane(CONNECT_LOG_LINES);
+      const delta = stripSharedPrefix(before, latest);
+      const matchingLine = findMatchingLine(delta, CONNECT_FAILURE_PATTERNS);
+      if (matchingLine) {
+        throw new Error(`Failed to connect to ${ip}: ${matchingLine}`);
+      }
+
+      const successLine = findMatchingLine(delta, CONNECT_SUCCESS_PATTERNS);
+      if (successLine) {
+        return {
+          message: `Connected to ${ip}`,
+          meta: {
+            ip,
+            status: 'connected',
+            matchedLine: successLine,
+          },
+        };
+      }
+    }
+
+    const delta = stripSharedPrefix(before, latest).trim();
+    const recentLog = tailLines(delta || latest, 20);
+    throw new Error(
+      `Timed out waiting for connection to ${ip}. Recent output:\n${recentLog || '(no new output)'}`,
+    );
+  }
 }
 
 function safeName(input: string): string {
   return input.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80);
+}
+
+function stripSharedPrefix(previous: string, current: string): string {
+  if (current.startsWith(previous)) {
+    return current.slice(previous.length);
+  }
+
+  return current;
+}
+
+function findMatchingLine(output: string, patterns: RegExp[]): string | null {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    if (patterns.some((pattern) => pattern.test(line))) {
+      return line;
+    }
+  }
+
+  return null;
+}
+
+function tailLines(output: string, count: number): string {
+  return output
+    .split('\n')
+    .filter(Boolean)
+    .slice(-count)
+    .join('\n');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

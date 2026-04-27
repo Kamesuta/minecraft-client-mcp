@@ -22,6 +22,9 @@ const RENDER_POLL_INTERVAL_MS = 100;
 const HUD_TOGGLE_SETTLE_MS = 150;
 const GUI_TIMEOUT_MS = 3_000;
 const GUI_POLL_INTERVAL_MS = 100;
+const COMMAND_TIMEOUT_MS = 3_000;
+const COMMAND_POLL_INTERVAL_MS = 100;
+const COMMAND_SETTLE_MS = 300;
 
 const CONNECT_SUCCESS_PATTERNS = [
   /\bjoined the game\b/i,
@@ -97,12 +100,23 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   async command(command: string): Promise<RuntimeResult> {
+    const before = await this.capturePane(CONNECT_LOG_LINES);
+    const sentCommand = command.startsWith('/') ? command : command.trim();
+
     if (command.startsWith('/')) {
       await this.sendChatCommand(command.slice(1));
     } else {
       await this.sendConsoleCommand(command);
     }
-    return { message: `Sent command: ${command}`, meta: { command } };
+
+    const commandOutput = await this.waitForCommandResult(before, sentCommand);
+    return {
+      message: commandOutput ? `Command result:\n${commandOutput}` : `Sent command: ${command}`,
+      meta: {
+        command,
+        commandOutput,
+      },
+    };
   }
 
   async key(key: string): Promise<RuntimeResult> {
@@ -339,6 +353,33 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
     throw new Error('Timed out waiting for GUI to close.');
   }
+
+  private async waitForCommandResult(before: string, command: string): Promise<string> {
+    const deadline = Date.now() + COMMAND_TIMEOUT_MS;
+    let latest = before;
+    let bestOutput = '';
+    let lastChangeAt = 0;
+
+    while (Date.now() < deadline) {
+      await sleep(COMMAND_POLL_INTERVAL_MS);
+      latest = await this.capturePane(CONNECT_LOG_LINES);
+      const delta = stripSharedPrefix(before, latest);
+      const commandOutput = extractCommandResult(delta, command);
+      if (commandOutput) {
+        if (commandOutput !== bestOutput) {
+          bestOutput = commandOutput;
+          lastChangeAt = Date.now();
+          continue;
+        }
+
+        if (lastChangeAt > 0 && Date.now() - lastChangeAt >= COMMAND_SETTLE_MS) {
+          return bestOutput;
+        }
+      }
+    }
+
+    return bestOutput;
+  }
 }
 
 function stripSharedPrefix(previous: string, current: string): string {
@@ -415,6 +456,46 @@ function extractCommandOutput(output: string, command: string): string {
   }
 
   return lines.slice(commandIndex + 1).join('\n');
+}
+
+function extractCommandResult(output: string, command: string): string {
+  const lines = extractCommandOutput(output, command)
+    .split('\n')
+    .map((line) => line.trimEnd());
+
+  const resultLines: string[] = [];
+  let started = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!started) {
+      if (!trimmed) {
+        continue;
+      }
+      started = true;
+    }
+
+    if (looksLikeCommandEcho(trimmed)) {
+      break;
+    }
+
+    resultLines.push(line);
+  }
+
+  return resultLines.join('\n').trim();
+}
+
+function looksLikeCommandEcho(line: string): boolean {
+  if (!line) {
+    return false;
+  }
+
+  if (line.startsWith('/')) {
+    return true;
+  }
+
+  return /^(connect|disconnect|render|gui|close|help|click|text|menu|memory|login|msg|key)\b/.test(line);
 }
 
 function sleep(ms: number): Promise<void> {

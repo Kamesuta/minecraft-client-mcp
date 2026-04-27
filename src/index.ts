@@ -90,7 +90,7 @@ server.addTool({
 server.addTool({
   name: 'hmc_headlessmc_command',
   description:
-    'Send a raw HeadlessMC command such as connect, render, gui, or other client-level operations.',
+    'Send a raw HeadlessMC command for client control, inspection, or automation. Run help to see available commands.',
   parameters: z.object({ command: z.string().min(1) }),
   execute: async ({ command }) => {
     const result = await runtime.headlessmcCommand(command);

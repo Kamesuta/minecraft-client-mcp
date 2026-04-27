@@ -8,8 +8,9 @@ const execFileAsync = promisify(execFile);
 
 type Options = {
   sessionName: string;
-  launcherCommand?: string;
-  screenshotsDir?: string;
+  launcherCommand: string;
+  screenshotsDir: string;
+  version: string;
 };
 
 const CONNECT_TIMEOUT_MS = 20_000;
@@ -54,29 +55,17 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
   constructor(private readonly options: Options) {}
 
-  async launch(version?: string): Promise<RuntimeResult> {
+  async launch(): Promise<RuntimeResult> {
     return this.withRuntimeLock(async () => {
+      const version = this.options.version;
       const exists = await this.hasSession();
       if (exists) {
         return {
-          message: version
-            ? `Using existing tmux session ${this.options.sessionName}. Ignored requested version ${version} because the session is already running.`
-            : `Using existing tmux session ${this.options.sessionName}`,
+          message: `Using existing tmux session ${this.options.sessionName}.`,
           meta: {
             sessionName: this.options.sessionName,
             reusedExistingSession: true,
-            requestedVersion: version,
-          },
-        };
-      }
-
-      if (!version) {
-        const versionsOutput = await this.runLauncherCommand('versions');
-        return {
-          message: `No version specified. Choose one of the available versions and call hmc_launch again with version set.\n${versionsOutput}`,
-          meta: {
-            requestedVersion: null,
-            commandOutput: versionsOutput,
+            version,
           },
         };
       }
@@ -90,7 +79,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
         message: `Launched detached tmux session ${this.options.sessionName} with HeadlessMC version ${version}.`,
         meta: {
           sessionName: this.options.sessionName,
-          requestedVersion: version,
+          version,
           launcherCommand: cmd,
           matchedLine: launchLogLine,
         },
@@ -270,7 +259,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   private buildLauncherCommand(headlessmcCommand?: string): string {
-    const base = this.options.launcherCommand ?? 'java -jar "./headlessmc-launcher.jar"';
+    const base = this.options.launcherCommand;
     if (!headlessmcCommand) {
       return base;
     }
@@ -278,16 +267,8 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     return `${base} --command ${shellQuote(headlessmcCommand)}`;
   }
 
-  private async runLauncherCommand(headlessmcCommand: string): Promise<string> {
-    const { stdout, stderr } = await execFileAsync('zsh', ['-c', this.buildLauncherCommand(headlessmcCommand)]);
-    return [stdout, stderr]
-      .filter(Boolean)
-      .join('\n')
-      .trim();
-  }
-
   private async captureScreenshot(): Promise<ScreenshotResult> {
-    const screenshotsDir = this.options.screenshotsDir ?? join(process.env.HOME ?? '', 'Library/Application Support/minecraft/screenshots');
+    const screenshotsDir = this.options.screenshotsDir;
     const before = await this.listScreenshotFiles(screenshotsDir);
     await this.sendConsoleCommand('close');
     await this.waitForGuiClosed();

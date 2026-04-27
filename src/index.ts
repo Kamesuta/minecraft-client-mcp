@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { FastMCP } from 'fastmcp';
 import { z } from 'zod';
 import { TmuxHeadlessMcAdapter } from './runtime/tmux-headlessmc.js';
@@ -9,19 +10,22 @@ const server = new FastMCP({
   version: '0.1.0',
 });
 
+const config = loadConfig();
+
 const runtime = new TmuxHeadlessMcAdapter({
-  sessionName: process.env.HMC_TMUX_SESSION ?? 'hmc',
-  launcherCommand: process.env.HMC_LAUNCHER_COMMAND,
-  screenshotsDir: process.env.HMC_SCREENSHOTS_DIR,
+  sessionName: config.sessionName,
+  launcherCommand: config.launcherCommand,
+  screenshotsDir: config.screenshotsDir,
+  version: config.version,
 });
 
 server.addTool({
   name: 'hmc_launch',
   description:
     'Launch or reuse the detached HeadlessMC tmux session. Run this before other hmc_* tools when needed.',
-  parameters: z.object({ version: z.string().min(1).optional() }),
-  execute: async ({ version }) => {
-    const result = await runtime.launch(version);
+  parameters: z.object({}),
+  execute: async () => {
+    const result = await runtime.launch();
     return createTextResult(result.message, result.meta);
   },
 });
@@ -119,11 +123,44 @@ server.addTool({
   },
 });
 
-const port = Number(process.env.MCP_PORT ?? 3000);
 await server.start({
   transportType: 'httpStream',
   httpStream: {
-    port,
-    host: process.env.MCP_HOST ?? '0.0.0.0',
+    port: config.port,
+    host: config.host,
   },
 });
+
+function loadConfig(): {
+  host: string;
+  port: number;
+  sessionName: string;
+  launcherCommand: string;
+  screenshotsDir: string;
+  version: string;
+} {
+  const host = requireEnv('MCP_HOST');
+  const portValue = requireEnv('MCP_PORT');
+  const port = Number(portValue);
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error(`MCP_PORT must be a positive integer, got: ${portValue}`);
+  }
+
+  return {
+    host,
+    port,
+    sessionName: requireEnv('HMC_TMUX_SESSION'),
+    launcherCommand: requireEnv('HMC_LAUNCHER_COMMAND'),
+    screenshotsDir: requireEnv('HMC_SCREENSHOTS_DIR'),
+    version: requireEnv('HMC_VERSION'),
+  };
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`Missing required environment variable ${name}. Set it in .env.`);
+  }
+
+  return value;
+}

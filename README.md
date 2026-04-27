@@ -23,20 +23,33 @@ That separation is meant to make a later Docker backend swap easier.
 
 ```bash
 npm install
+cp .env.example .env
 npm run dev
+```
+
+This project expects `.env` to be present.
+
+```dotenv
+MCP_HOST=127.0.0.1
+MCP_PORT=3000
+HMC_TMUX_SESSION=hmc
+HMC_VERSION=1.21.4
+HMC_LAUNCHER_COMMAND=java -jar "./headlessmc-launcher.jar"
+HMC_SCREENSHOTS_DIR=/Users/your-name/Library/Application Support/minecraft/screenshots
 ```
 
 ## Environment
 
-- `MCP_HOST` (default `127.0.0.1`)
-- `MCP_PORT` (default `3000`)
-- `HMC_TMUX_SESSION` (default `hmc`)
+- `MCP_HOST`
+- `MCP_PORT`
+- `HMC_TMUX_SESSION`
+- `HMC_VERSION`
 - `HMC_LAUNCHER_COMMAND`
 - `HMC_SCREENSHOTS_DIR`
 
 ## Tools
 
-- `hmc_launch` — reuse or start the session detached; pass `version` such as `fabric:1.21.4`, or omit it to get `versions` output and choose one
+- `hmc_launch` — reuse or start the session detached
 - `hmc_logs` — read recent tmux scrollback
 - `hmc_connect` — connect and wait until success or failure is observable in logs
 - `hmc_player_command` — run a Minecraft slash command as the in-game player

@@ -25,6 +25,7 @@ const GUI_POLL_INTERVAL_MS = 100;
 const COMMAND_TIMEOUT_MS = 3_000;
 const COMMAND_POLL_INTERVAL_MS = 100;
 const COMMAND_SETTLE_MS = 300;
+const SPECTATE_TARGET_NOT_FOUND_PATTERNS = [/\bNo entity was found\b/i];
 
 const CONNECT_SUCCESS_PATTERNS = [
   /\bjoined the game\b/i,
@@ -95,7 +96,15 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   async viewAs(player: string): Promise<ScreenshotResult> {
     return this.withRuntimeLock(async () => {
       await this.sendChatCommand('gamemode spectator');
-      await this.sendChatCommand(`spectate ${player}`);
+      const spectateOutput = await this.executeMinecraftCommand(`spectate ${player}`);
+      const spectateFailure = findMatchingLine(
+        String(spectateOutput.meta?.commandOutput ?? ''),
+        SPECTATE_TARGET_NOT_FOUND_PATTERNS,
+      );
+      if (spectateFailure) {
+        throw new Error(`Failed to spectate ${player}: ${spectateFailure}`);
+      }
+
       return this.captureScreenshot();
     });
   }

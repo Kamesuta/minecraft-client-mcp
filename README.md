@@ -2,22 +2,34 @@
 
 FastMCP wrapper around a HeadlessMC tmux session.
 
-## Status
+## What this is for
 
-This is the initial implementation scaffold. It is intentionally split into:
+This MCP is for capturing screenshots rendered by a real Minecraft client.
+It uses HeadlessMC to actually launch Minecraft, render the world, and take screenshots from the client itself.
 
-- MCP surface (`src/index.ts`)
-- runtime adapter (`src/runtime/tmux-headlessmc.ts`)
-- result formatting (`src/mcp/results.ts`)
+If your goal is Minecraft automation itself, you will usually want a Mineflayer-based MCP such as
+[minecraft-mcp-server](https://github.com/yuniko-software/minecraft-mcp-server)
+instead of this one.
 
-That separation is meant to make a later Docker backend swap easier.
+This MCP becomes especially useful when paired with that kind of automation-oriented MCP.
 
-## tmux model
+- drive gameplay with a Mineflayer-based MCP
+- then capture screenshots from the viewpoint of the actual in-game player
+- pass the real rendered screen to an AI, not just bot-side state
 
-- Never attach to the HeadlessMC tmux session from MCP.
-- Reuse an existing session if present.
-- Otherwise create it detached.
-- Use tmux capture-pane for logs and tmux send-keys for interaction.
+In other words, this project is intended to complement automation-oriented MCPs, not replace them.
+
+## What it can do
+
+This MCP mainly supports two screenshot workflows:
+
+- spectate another player and capture screenshots from that player's point of view
+- capture screenshots from a specific position and camera direction
+
+Along with the screenshot itself, you can also obtain the `render` result.
+This is coarse text information describing what is currently visible in the 3D scene.
+
+That extra `render` output can be useful for AI decision-making when an agent needs lightweight scene awareness in addition to the raw screenshot.
 
 ## Run
 
@@ -38,14 +50,7 @@ HMC_LAUNCHER_COMMAND=java -jar "./headlessmc-launcher.jar"
 HMC_SCREENSHOTS_DIR=/Users/your-name/Library/Application Support/minecraft/screenshots
 ```
 
-## Environment
-
-- `MCP_HOST`
-- `MCP_PORT`
-- `HMC_TMUX_SESSION`
-- `HMC_VERSION`
-- `HMC_LAUNCHER_COMMAND`
-- `HMC_SCREENSHOTS_DIR`
+See [.env.example](./.env.example) for the expected environment variables.
 
 ## Tools
 
@@ -56,4 +61,12 @@ HMC_SCREENSHOTS_DIR=/Users/your-name/Library/Application Support/minecraft/scree
 - `hmc_player_command` — run a Minecraft slash command as the in-game player
 - `hmc_headlessmc_command` — send a raw HeadlessMC command
 - `batch_execute` — send multiple raw HeadlessMC commands in one call
-- `hmc_view_as` / `hmc_view_at` — capture screenshots
+- `hmc_view_as` / `hmc_view_at` — capture screenshots and collect render output
+
+## Verified environment
+
+- macOS + tmux
+
+## TODO
+
+- Docker + Linux support

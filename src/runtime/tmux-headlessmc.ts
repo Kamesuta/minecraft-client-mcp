@@ -143,6 +143,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   async logs(lines = 30): Promise<RuntimeResult> {
+    await this.requireActiveSession();
     const args = ['capture-pane', '-t', `${this.options.sessionName}:0`, '-p'];
     if (lines > 0) {
       args.push('-S', `-${lines}`);
@@ -156,6 +157,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
   async connect(ip: string): Promise<RuntimeResult> {
     return this.withRuntimeLock(async () => {
+      await this.requireActiveSession();
       const before = await this.capturePane(CONNECT_LOG_LINES);
       await this.sendConsoleCommand(`connect ${ip}`);
       const result = await this.waitForConnectResult(ip, before);
@@ -172,6 +174,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
   async viewAs(player: string): Promise<ScreenshotResult> {
     return this.withRuntimeLock(async () => {
+      await this.requireActiveSession();
       await this.sendChatCommand('gamemode spectator');
       const spectateOutput = await this.executeMinecraftCommand(`spectate ${player}`);
       const spectateFailure = findMatchingLine(
@@ -188,6 +191,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
   async viewAt(target: { x: number; y: number; z: number; yaw: number; pitch: number }): Promise<ScreenshotResult> {
     return this.withRuntimeLock(async () => {
+      await this.requireActiveSession();
       const { x, y, z, yaw, pitch } = target;
       await this.sendChatCommand('gamemode spectator');
       await this.sendChatCommand(`tp @s ${x} ${y} ${z} ${yaw} ${pitch}`);
@@ -196,15 +200,22 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   async playerCommand(command: string): Promise<RuntimeResult> {
-    return this.withRuntimeLock(() => this.executeMinecraftCommand(command));
+    return this.withRuntimeLock(async () => {
+      await this.requireActiveSession();
+      return this.executeMinecraftCommand(command);
+    });
   }
 
   async headlessmcCommand(command: string): Promise<RuntimeResult> {
-    return this.withRuntimeLock(() => this.executeHeadlessmcCommand(command));
+    return this.withRuntimeLock(async () => {
+      await this.requireActiveSession();
+      return this.executeHeadlessmcCommand(command);
+    });
   }
 
   async batchExecute(operations: BatchOperation[]): Promise<BatchResult> {
     return this.withRuntimeLock(async () => {
+      await this.requireActiveSession();
       const results: BatchResult['results'] = [];
 
       for (const [index, operation] of operations.entries()) {
@@ -311,6 +322,16 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     } catch {
       return false;
     }
+  }
+
+  private async requireActiveSession(): Promise<void> {
+    if (await this.hasSession()) {
+      return;
+    }
+
+    throw new Error(
+      `Minecraft is not running in tmux session ${this.options.sessionName}. Call hmc_launch first.`,
+    );
   }
 
   private async waitForSessionExit(timeoutMs: number): Promise<boolean> {

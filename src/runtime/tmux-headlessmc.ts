@@ -50,6 +50,18 @@ const CONNECT_FAILURE_PATTERNS = [
   /\bInvalid session\b/i,
 ];
 
+const FABRIC_LAUNCH_PATTERNS = [/\bLoading Minecraft .* with Fabric Loader\b/i];
+const HEADLESSMC_READY_PATTERNS = [
+  /\bLoading HMC-Specifics!\b/i,
+  /\bHMC-Specifics initialized!\b/i,
+  /\bHeadlessMc-CommandLine\b/i,
+];
+const NON_FABRIC_PROGRESS_PATTERNS = [
+  /\bSetting user:\b/i,
+  /\bReloading ResourceManager:\b/i,
+  /\bOpenAL initialized on device\b/i,
+];
+
 export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   private hudHidden: boolean | null = null;
   private markerSequence = 0;
@@ -301,6 +313,20 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     }
   }
 
+  private async waitForSessionExit(timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      if (!(await this.hasSession())) {
+        return true;
+      }
+
+      await sleep(QUIT_POLL_INTERVAL_MS);
+    }
+
+    return !(await this.hasSession());
+  }
+
   private buildLauncherCommand(headlessmcCommand?: string): string {
     const base = this.options.launcherCommand;
     if (!headlessmcCommand) {
@@ -365,7 +391,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   private async waitForLaunchResult(version: string, launcherCommand: string): Promise<string> {
     const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
     let latest = '';
-    const successPatterns = getLaunchSuccessPatterns(version);
+    let fabricMatchedLine: string | null = null;
 
     while (Date.now() < deadline) {
       await sleep(LAUNCH_POLL_INTERVAL_MS);
@@ -386,15 +412,61 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
         throw error;
       }
 
-      const successLine = findMatchingLine(latest, successPatterns);
+      fabricMatchedLine ??= findMatchingLine(latest, FABRIC_LAUNCH_PATTERNS);
+      const successLine = findMatchingLine(latest, HEADLESSMC_READY_PATTERNS);
       if (successLine) {
+        if (!fabricMatchedLine) {
+          await this.terminateSession();
+          throw new Error(
+            [
+              `HeadlessMC session ${this.options.sessionName} initialized without a Fabric launch signature for version ${version}.`,
+              `Tried launcher command: ${launcherCommand}`,
+              'HMC requires a Fabric-based launch target such as fabric:1.21.4, not vanilla 1.21.4.',
+            ].join('\n'),
+          );
+        }
+
         return successLine;
+      }
+
+      const incompatibleLine = findMatchingLine(latest, NON_FABRIC_PROGRESS_PATTERNS);
+      if (incompatibleLine && !fabricMatchedLine) {
+        await this.terminateSession();
+        throw new Error(
+          [
+            `Detected a non-Fabric Minecraft launch for version ${version}.`,
+            `Matched log line: ${incompatibleLine}`,
+            `Tried launcher command: ${launcherCommand}`,
+            'HMC requires Fabric and the HeadlessMC mod. Use a version ID like fabric:1.21.4 instead of vanilla 1.21.4.',
+          ].join('\n'),
+        );
       }
     }
 
     throw new Error(
       `Timed out waiting for HeadlessMC launch ${version}. Recent output:\n${tailLines(latest, 20) || '(no output)'}`,
     );
+  }
+
+  private async terminateSession(): Promise<void> {
+    if (!(await this.hasSession())) {
+      this.hudHidden = null;
+      return;
+    }
+
+    try {
+      await execFileAsync('tmux', ['kill-session', '-t', this.options.sessionName]);
+    } catch (error) {
+      if (await this.hasSession()) {
+        throw error;
+      }
+    }
+
+    if (!(await this.waitForSessionExit(QUIT_TIMEOUT_MS))) {
+      throw new Error(`Timed out waiting for tmux session ${this.options.sessionName} to terminate.`);
+    }
+
+    this.hudHidden = null;
   }
 
   private async listScreenshotFiles(screenshotsDir: string): Promise<Map<string, number>> {
@@ -627,10 +699,6 @@ function hasHudMarker(renderOutput: string): boolean {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function getLaunchSuccessPatterns(version: string): RegExp[] {
-  return [/\[ProcessFactory\]: Game will run in /i];
 }
 
 function extractBetweenMarkers(output: string, startMarker: string, endMarker?: string): string {

@@ -40,5 +40,5 @@ npm run dev
 - `hmc_logs` — read recent tmux scrollback
 - `hmc_connect` — connect and wait until success or failure is observable in logs
 - `hmc_command` — send a raw command
-- `hmc_key` — send a raw key
+- `batch_execute` — send multiple raw commands in one call
 - `hmc_view_as` / `hmc_view_at` — capture screenshots

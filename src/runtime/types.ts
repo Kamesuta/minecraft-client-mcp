@@ -12,8 +12,7 @@ export type RuntimeResult = {
 };
 
 export type BatchOperation =
-  | { type: 'command'; command: string }
-  | { type: 'key'; key: string };
+  | { type: 'command'; command: string };
 
 export type BatchResult = {
   message: string;
@@ -33,6 +32,5 @@ export interface MinecraftClientRuntime {
   viewAs(player: string): Promise<ScreenshotResult>;
   viewAt(target: { x: number; y: number; z: number; yaw: number; pitch: number }): Promise<ScreenshotResult>;
   command(command: string): Promise<RuntimeResult>;
-  key(key: string): Promise<RuntimeResult>;
   batchExecute(operations: BatchOperation[]): Promise<BatchResult>;
 }

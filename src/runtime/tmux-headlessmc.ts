@@ -113,20 +113,13 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     return this.withRuntimeLock(() => this.executeCommand(command));
   }
 
-  async key(key: string): Promise<RuntimeResult> {
-    return this.withRuntimeLock(() => this.executeKey(key));
-  }
-
   async batchExecute(operations: BatchOperation[]): Promise<BatchResult> {
     return this.withRuntimeLock(async () => {
       const results: BatchResult['results'] = [];
 
       for (const [index, operation] of operations.entries()) {
         try {
-          const result =
-            operation.type === 'command'
-              ? await this.executeCommand(operation.command)
-              : await this.executeKey(operation.key);
+          const result = await this.executeCommand(operation.command);
 
           results.push({
             index,
@@ -176,11 +169,6 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
         commandOutput,
       },
     };
-  }
-
-  private async executeKey(key: string): Promise<RuntimeResult> {
-    await this.pressKey(key);
-    return { message: `Sent key: ${key}`, meta: { key } };
   }
 
   private async sendChatCommand(command: string): Promise<void> {

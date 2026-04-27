@@ -51,7 +51,7 @@ server.addTool({
 server.addTool({
   name: 'hmc_view_as',
   description:
-    'Capture a screenshot while viewing a specific player. Use this when the target is a player, not a coordinate. Prefer this over combining hmc_command and hmc_key manually.',
+    'Capture a screenshot while viewing a specific player. Use this when the target is a player, not a coordinate.',
   parameters: z.object({ player: z.string().min(1) }),
   execute: async ({ player }) => {
     const result = await runtime.viewAs(player);
@@ -88,27 +88,13 @@ server.addTool({
 });
 
 server.addTool({
-  name: 'hmc_key',
-  description:
-    'Send a raw key input to the HeadlessMC client. Use this only for interactions that genuinely require client keypresses, such as toggling F1, moving briefly, opening UI, or handling controls that are not exposed through a dedicated tool. Avoid using this for multi-step camera orchestration when a higher-level tool exists, because raw key automation is timing-sensitive and much less reliable for LLM-driven control.',
-  parameters: z.object({ key: z.string().min(1) }),
-  execute: async ({ key }) => {
-    const result = await runtime.key(key);
-    return createTextResult(result.message, result.meta);
-  },
-});
-
-server.addTool({
   name: 'batch_execute',
   description:
-    'Execute multiple low-level HeadlessMC operations in a single call for better reliability and lower latency. Strongly recommended when an AI agent needs to send several raw Minecraft commands or key presses in sequence. Prefer this over many separate hmc_command or hmc_key calls for repetitive work. For camera capture workflows, still prefer hmc_view_as or hmc_view_at when they match the intent. This batch tool currently supports only command and key operations, executes them in order, and stops on the first failure.',
+    'Execute multiple Minecraft commands in a single call for better reliability and lower latency.',
   parameters: z.object({
     operations: z
       .array(
-        z.discriminatedUnion('type', [
-          z.object({ type: z.literal('command'), command: z.string().min(1) }),
-          z.object({ type: z.literal('key'), key: z.string().min(1) }),
-        ]),
+        z.discriminatedUnion('type', [z.object({ type: z.literal('command'), command: z.string().min(1) })]),
       )
       .min(1)
       .max(25),

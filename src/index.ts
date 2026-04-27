@@ -31,6 +31,17 @@ server.addTool({
 });
 
 server.addTool({
+  name: 'hmc_quit',
+  description:
+    'Ask HeadlessMC to quit, then wait until the backing tmux session is fully gone. Force-kills the session if graceful shutdown stalls.',
+  parameters: z.object({}),
+  execute: async () => {
+    const result = await runtime.quit();
+    return createTextResult(result.message, result.meta);
+  },
+});
+
+server.addTool({
   name: 'hmc_logs',
   description:
     'Read recent HeadlessMC output from tmux scrollback without attaching to the session.',

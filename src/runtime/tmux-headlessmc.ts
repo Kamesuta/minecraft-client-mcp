@@ -18,6 +18,8 @@ const CONNECT_POLL_INTERVAL_MS = 500;
 const CONNECT_LOG_LINES = 400;
 const LAUNCH_TIMEOUT_MS = 30_000;
 const LAUNCH_POLL_INTERVAL_MS = 500;
+const QUIT_TIMEOUT_MS = 15_000;
+const QUIT_POLL_INTERVAL_MS = 250;
 const SCREENSHOT_TIMEOUT_MS = 10_000;
 const SCREENSHOT_POLL_INTERVAL_MS = 250;
 const RENDER_TIMEOUT_MS = 3_000;
@@ -71,9 +73,8 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
       }
 
       const cmd = this.buildLauncherCommand(`launch ${version}`);
-      await execFileAsync('tmux', ['new-session', '-d', '-s', this.options.sessionName, 'zsh', '-c', 'exec zsh']);
+      await execFileAsync('tmux', ['new-session', '-d', '-s', this.options.sessionName, 'zsh', '-c', cmd]);
       await sleep(100);
-      await this.sendConsoleCommand(cmd);
       const launchLogLine = await this.waitForLaunchResult(version, cmd);
       return {
         message: `Launched detached tmux session ${this.options.sessionName} with HeadlessMC version ${version}.`,
@@ -82,6 +83,48 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
           version,
           launcherCommand: cmd,
           matchedLine: launchLogLine,
+        },
+      };
+    });
+  }
+
+  async quit(): Promise<RuntimeResult> {
+    return this.withRuntimeLock(async () => {
+      if (!(await this.hasSession())) {
+        return {
+          message: `tmux session ${this.options.sessionName} is already stopped.`,
+          meta: {
+            sessionName: this.options.sessionName,
+            alreadyStopped: true,
+          },
+        };
+      }
+
+      await this.sendConsoleCommand('quit');
+      const graceful = await this.waitForSessionExit(QUIT_TIMEOUT_MS);
+      if (graceful) {
+        this.hudHidden = null;
+        return {
+          message: `Stopped tmux session ${this.options.sessionName}.`,
+          meta: {
+            sessionName: this.options.sessionName,
+            shutdown: 'graceful',
+          },
+        };
+      }
+
+      await execFileAsync('tmux', ['kill-session', '-t', this.options.sessionName]);
+      const forced = await this.waitForSessionExit(QUIT_TIMEOUT_MS);
+      if (!forced) {
+        throw new Error(`Timed out waiting for tmux session ${this.options.sessionName} to terminate.`);
+      }
+
+      this.hudHidden = null;
+      return {
+        message: `Stopped tmux session ${this.options.sessionName} after forcing termination.`,
+        meta: {
+          sessionName: this.options.sessionName,
+          shutdown: 'forced',
         },
       };
     });

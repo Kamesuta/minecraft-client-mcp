@@ -50,6 +50,7 @@ HMC_SCREENSHOTS_DIR=/Users/your-name/Library/Application Support/minecraft/scree
 ## Tools
 
 - `hmc_launch` — reuse or start the session detached
+- `hmc_quit` — stop HeadlessMC and wait until the tmux session is fully gone
 - `hmc_logs` — read recent tmux scrollback
 - `hmc_connect` — connect and wait until success or failure is observable in logs
 - `hmc_player_command` — run a Minecraft slash command as the in-game player

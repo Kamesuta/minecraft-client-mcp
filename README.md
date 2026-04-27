@@ -36,7 +36,7 @@ npm run dev
 
 ## Tools
 
-- `hmc_launch` — reuse or start the session detached
+- `hmc_launch` — reuse or start the session detached; pass `version` such as `fabric:1.21.4`, or omit it to get `versions` output and choose one
 - `hmc_logs` — read recent tmux scrollback
 - `hmc_connect` — connect and wait until success or failure is observable in logs
 - `hmc_player_command` — run a Minecraft slash command as the in-game player

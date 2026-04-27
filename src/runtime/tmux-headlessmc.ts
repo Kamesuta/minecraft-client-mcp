@@ -15,6 +15,8 @@ type Options = {
 const CONNECT_TIMEOUT_MS = 20_000;
 const CONNECT_POLL_INTERVAL_MS = 500;
 const CONNECT_LOG_LINES = 400;
+const LAUNCH_TIMEOUT_MS = 30_000;
+const LAUNCH_POLL_INTERVAL_MS = 500;
 const SCREENSHOT_TIMEOUT_MS = 10_000;
 const SCREENSHOT_POLL_INTERVAL_MS = 250;
 const RENDER_TIMEOUT_MS = 3_000;
@@ -52,16 +54,47 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
   constructor(private readonly options: Options) {}
 
-  async launch(): Promise<RuntimeResult> {
+  async launch(version?: string): Promise<RuntimeResult> {
     return this.withRuntimeLock(async () => {
-      const cmd = this.options.launcherCommand ?? 'java -jar "$HOME/headlessmc.jar"';
       const exists = await this.hasSession();
       if (exists) {
-        return { message: `Using existing tmux session ${this.options.sessionName}` };
+        return {
+          message: version
+            ? `Using existing tmux session ${this.options.sessionName}. Ignored requested version ${version} because the session is already running.`
+            : `Using existing tmux session ${this.options.sessionName}`,
+          meta: {
+            sessionName: this.options.sessionName,
+            reusedExistingSession: true,
+            requestedVersion: version,
+          },
+        };
       }
 
-      await execFileAsync('tmux', ['new-session', '-d', '-s', this.options.sessionName, 'zsh', '-lc', cmd]);
-      return { message: `Launched detached tmux session ${this.options.sessionName}` };
+      if (!version) {
+        const versionsOutput = await this.runLauncherCommand('versions');
+        return {
+          message: `No version specified. Choose one of the available versions and call hmc_launch again with version set.\n${versionsOutput}`,
+          meta: {
+            requestedVersion: null,
+            commandOutput: versionsOutput,
+          },
+        };
+      }
+
+      const cmd = this.buildLauncherCommand(`launch ${version}`);
+      await execFileAsync('tmux', ['new-session', '-d', '-s', this.options.sessionName, 'zsh', '-c', 'exec zsh']);
+      await sleep(100);
+      await this.sendConsoleCommand(cmd);
+      const launchLogLine = await this.waitForLaunchResult(version, cmd);
+      return {
+        message: `Launched detached tmux session ${this.options.sessionName} with HeadlessMC version ${version}.`,
+        meta: {
+          sessionName: this.options.sessionName,
+          requestedVersion: version,
+          launcherCommand: cmd,
+          matchedLine: launchLogLine,
+        },
+      };
     });
   }
 
@@ -189,13 +222,16 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     };
   }
 
-  private async executeHeadlessmcCommand(command: string): Promise<RuntimeResult> {
-    const sentCommand = command.trim();
-    const commandOutput = await this.runCapturedConsoleCommand(sentCommand, {
+  private async executeHeadlessmcCommand(
+    command: string,
+    options: { timeoutMs: number; pollIntervalMs: number; settleMs: number } = {
       timeoutMs: COMMAND_TIMEOUT_MS,
       pollIntervalMs: COMMAND_POLL_INTERVAL_MS,
       settleMs: COMMAND_SETTLE_MS,
-    });
+    },
+  ): Promise<RuntimeResult> {
+    const sentCommand = command.trim();
+    const commandOutput = await this.runCapturedConsoleCommand(sentCommand, options);
 
     return {
       message: commandOutput ? `HeadlessMC command result:\n${commandOutput}` : `Sent HeadlessMC command: ${sentCommand}`,
@@ -216,7 +252,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   private async capturePane(lines: number): Promise<string> {
-    const args = ['capture-pane', '-t', `${this.options.sessionName}:0`, '-p'];
+    const args = ['capture-pane', '-J', '-t', `${this.options.sessionName}:0`, '-p'];
     if (lines > 0) {
       args.push('-S', `-${lines}`);
     }
@@ -231,6 +267,23 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     } catch {
       return false;
     }
+  }
+
+  private buildLauncherCommand(headlessmcCommand?: string): string {
+    const base = this.options.launcherCommand ?? 'java -jar "./headlessmc-launcher.jar"';
+    if (!headlessmcCommand) {
+      return base;
+    }
+
+    return `${base} --command ${shellQuote(headlessmcCommand)}`;
+  }
+
+  private async runLauncherCommand(headlessmcCommand: string): Promise<string> {
+    const { stdout, stderr } = await execFileAsync('zsh', ['-c', this.buildLauncherCommand(headlessmcCommand)]);
+    return [stdout, stderr]
+      .filter(Boolean)
+      .join('\n')
+      .trim();
   }
 
   private async captureScreenshot(): Promise<ScreenshotResult> {
@@ -282,6 +335,41 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     const recentLog = tailLines(delta || latest, 20);
     throw new Error(
       `Timed out waiting for connection to ${ip}. Recent output:\n${recentLog || '(no new output)'}`,
+    );
+  }
+
+  private async waitForLaunchResult(version: string, launcherCommand: string): Promise<string> {
+    const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
+    let latest = '';
+    const successPatterns = getLaunchSuccessPatterns(version);
+
+    while (Date.now() < deadline) {
+      await sleep(LAUNCH_POLL_INTERVAL_MS);
+      try {
+        latest = await this.capturePane(CONNECT_LOG_LINES);
+      } catch (error) {
+        if (!(await this.hasSession())) {
+          throw new Error(
+            [
+              `HeadlessMC session ${this.options.sessionName} exited before startup completed for version ${version}.`,
+              `Tried launcher command: ${launcherCommand}`,
+              'The process likely failed immediately before Minecraft finished loading.',
+              'Check the jar path, Java runtime, account/auth state, and whether that version ID is launchable.',
+            ].join('\n'),
+          );
+        }
+
+        throw error;
+      }
+
+      const successLine = findMatchingLine(latest, successPatterns);
+      if (successLine) {
+        return successLine;
+      }
+    }
+
+    throw new Error(
+      `Timed out waiting for HeadlessMC launch ${version}. Recent output:\n${tailLines(latest, 20) || '(no output)'}`,
     );
   }
 
@@ -511,6 +599,14 @@ function extractRenderOutput(output: string): string {
 
 function hasHudMarker(renderOutput: string): boolean {
   return renderOutput.includes('XYZ:') || renderOutput.includes('Minecraft ');
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function getLaunchSuccessPatterns(version: string): RegExp[] {
+  return [/\[ProcessFactory\]: Game will run in /i];
 }
 
 function extractBetweenMarkers(output: string, startMarker: string, endMarker?: string): string {

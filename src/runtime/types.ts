@@ -27,7 +27,7 @@ export type BatchResult = {
 };
 
 export interface MinecraftClientRuntime {
-  launch(): Promise<RuntimeResult>;
+  launch(version?: string): Promise<RuntimeResult>;
   logs(lines?: number): Promise<RuntimeResult>;
   connect(ip: string): Promise<RuntimeResult>;
   viewAs(player: string): Promise<ScreenshotResult>;

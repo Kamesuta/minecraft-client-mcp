@@ -19,9 +19,9 @@ server.addTool({
   name: 'hmc_launch',
   description:
     'Launch or reuse the detached HeadlessMC tmux session. Run this before other hmc_* tools when needed.',
-  parameters: z.object({}),
-  execute: async () => {
-    const result = await runtime.launch();
+  parameters: z.object({ version: z.string().min(1).optional() }),
+  execute: async ({ version }) => {
+    const result = await runtime.launch(version);
     return createTextResult(result.message, result.meta);
   },
 });

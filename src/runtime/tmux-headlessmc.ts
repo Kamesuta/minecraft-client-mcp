@@ -409,7 +409,7 @@ function extractCommandOutput(output: string, command: string): string {
     .split('\n')
     .map((line) => line.trimEnd());
 
-  const commandIndex = lines.findIndex((line) => line.trim() === command);
+  const commandIndex = lines.findLastIndex((line) => line.trim() === command);
   if (commandIndex === -1) {
     return '';
   }

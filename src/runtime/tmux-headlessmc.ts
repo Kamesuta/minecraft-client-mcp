@@ -109,8 +109,12 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     });
   }
 
-  async command(command: string): Promise<RuntimeResult> {
-    return this.withRuntimeLock(() => this.executeCommand(command));
+  async playerCommand(command: string): Promise<RuntimeResult> {
+    return this.withRuntimeLock(() => this.executeMinecraftCommand(command));
+  }
+
+  async headlessmcCommand(command: string): Promise<RuntimeResult> {
+    return this.withRuntimeLock(() => this.executeHeadlessmcCommand(command));
   }
 
   async batchExecute(operations: BatchOperation[]): Promise<BatchResult> {
@@ -119,7 +123,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
       for (const [index, operation] of operations.entries()) {
         try {
-          const result = await this.executeCommand(operation.command);
+          const result = await this.executeHeadlessmcCommand(operation.command);
 
           results.push({
             index,
@@ -154,8 +158,9 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, command, 'C-m']);
   }
 
-  private async executeCommand(command: string): Promise<RuntimeResult> {
-    const sentCommand = command.startsWith('/') ? command : command.trim();
+  private async executeMinecraftCommand(command: string): Promise<RuntimeResult> {
+    const trimmed = command.trim().replace(/^\/+/, '');
+    const sentCommand = `/${trimmed}`;
     const commandOutput = await this.runCapturedConsoleCommand(sentCommand, {
       timeoutMs: COMMAND_TIMEOUT_MS,
       pollIntervalMs: COMMAND_POLL_INTERVAL_MS,
@@ -163,9 +168,28 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     });
 
     return {
-      message: commandOutput ? `Command result:\n${commandOutput}` : `Sent command: ${command}`,
+      message: commandOutput ? `Minecraft command result:\n${commandOutput}` : `Sent Minecraft command: /${trimmed}`,
       meta: {
-        command,
+        command: trimmed,
+        sentCommand,
+        commandOutput,
+      },
+    };
+  }
+
+  private async executeHeadlessmcCommand(command: string): Promise<RuntimeResult> {
+    const sentCommand = command.trim();
+    const commandOutput = await this.runCapturedConsoleCommand(sentCommand, {
+      timeoutMs: COMMAND_TIMEOUT_MS,
+      pollIntervalMs: COMMAND_POLL_INTERVAL_MS,
+      settleMs: COMMAND_SETTLE_MS,
+    });
+
+    return {
+      message: commandOutput ? `HeadlessMC command result:\n${commandOutput}` : `Sent HeadlessMC command: ${sentCommand}`,
+      meta: {
+        command: sentCommand,
+        sentCommand,
         commandOutput,
       },
     };

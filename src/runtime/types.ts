@@ -31,6 +31,7 @@ export interface MinecraftClientRuntime {
   connect(ip: string): Promise<RuntimeResult>;
   viewAs(player: string): Promise<ScreenshotResult>;
   viewAt(target: { x: number; y: number; z: number; yaw: number; pitch: number }): Promise<ScreenshotResult>;
-  command(command: string): Promise<RuntimeResult>;
+  playerCommand(command: string): Promise<RuntimeResult>;
+  headlessmcCommand(command: string): Promise<RuntimeResult>;
   batchExecute(operations: BatchOperation[]): Promise<BatchResult>;
 }

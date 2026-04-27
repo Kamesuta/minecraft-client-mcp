@@ -39,6 +39,7 @@ npm run dev
 - `hmc_launch` — reuse or start the session detached
 - `hmc_logs` — read recent tmux scrollback
 - `hmc_connect` — connect and wait until success or failure is observable in logs
-- `hmc_command` — send a raw command
-- `batch_execute` — send multiple raw commands in one call
+- `hmc_player_command` — run a Minecraft slash command as the in-game player
+- `hmc_headlessmc_command` — send a raw HeadlessMC command
+- `batch_execute` — send multiple raw HeadlessMC commands in one call
 - `hmc_view_as` / `hmc_view_at` — capture screenshots

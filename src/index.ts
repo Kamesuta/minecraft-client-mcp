@@ -40,7 +40,7 @@ server.addTool({
 server.addTool({
   name: 'hmc_connect',
   description:
-    'Connect the HeadlessMC client to a multiplayer server by IP or host:port. Use this only after hmc_launch has succeeded and the client is ready to accept commands. Prefer this tool over sending raw connect text through hmc_command because this tool expresses clear intent and is easier for an AI agent to choose correctly.',
+    'Connect the HeadlessMC client to a multiplayer server by IP or host:port. Use this only after hmc_launch has succeeded and the client is ready to accept commands. Prefer this tool over sending raw connect text through hmc_headlessmc_command because this tool expresses clear intent and is easier for an AI agent to choose correctly.',
   parameters: z.object({ ip: z.string().min(1) }),
   execute: async ({ ip }) => {
     const result = await runtime.connect(ip);
@@ -77,12 +77,23 @@ server.addTool({
 });
 
 server.addTool({
-  name: 'hmc_command',
+  name: 'hmc_player_command',
   description:
-    'Send a raw Minecraft command or chat-style control command to the HeadlessMC client. Use this for advanced actions that do not yet have a dedicated high-level MCP tool, such as world commands, gamemode changes, teleportation, or server-specific commands. Do not prefer this for connect or camera flows when hmc_connect, hmc_view_as, or hmc_view_at can express the intent directly. This is a lower-level escape hatch and is more error-prone for autonomous agents.',
+    'Send a Minecraft slash command as the in-game player controlled by HeadlessMC. Use this for player-context actions that need to run from the client side, including commands that may not be executable from the server console or that depend on the player as the executor. This is especially useful for player-only commands such as local movement, camera, world interaction, or plugin commands that behave differently for players than for console. Do not prefer this for connecting or camera capture flows when hmc_connect, hmc_view_as, or hmc_view_at already express the intent directly.',
   parameters: z.object({ command: z.string().min(1) }),
   execute: async ({ command }) => {
-    const result = await runtime.command(command);
+    const result = await runtime.playerCommand(command);
+    return createTextResult(result.message, result.meta);
+  },
+});
+
+server.addTool({
+  name: 'hmc_headlessmc_command',
+  description:
+    'Send a raw HeadlessMC command exactly as typed. Use this for HeadlessMC runtime controls and other non-Minecraft commands such as connect, render, gui, close, or similar low-level client operations. Prefer hmc_player_command when the intent is to run a Minecraft slash command as the player.',
+  parameters: z.object({ command: z.string().min(1) }),
+  execute: async ({ command }) => {
+    const result = await runtime.headlessmcCommand(command);
     return createTextResult(result.message, result.meta);
   },
 });
@@ -90,7 +101,7 @@ server.addTool({
 server.addTool({
   name: 'batch_execute',
   description:
-    'Execute multiple Minecraft commands in a single call for better reliability and lower latency.',
+    'Execute multiple raw HeadlessMC commands in a single call for better reliability and lower latency. Prefer hmc_player_command for Minecraft slash commands that should run as the player.',
   parameters: z.object({
     operations: z
       .array(

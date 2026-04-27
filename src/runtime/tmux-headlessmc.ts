@@ -46,18 +46,22 @@ const CONNECT_FAILURE_PATTERNS = [
 
 export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   private hudHidden: boolean | null = null;
+  private markerSequence = 0;
+  private operationChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: Options) {}
 
   async launch(): Promise<RuntimeResult> {
-    const cmd = this.options.launcherCommand ?? 'java -jar "$HOME/headlessmc.jar"';
-    const exists = await this.hasSession();
-    if (exists) {
-      return { message: `Using existing tmux session ${this.options.sessionName}` };
-    }
+    return this.withRuntimeLock(async () => {
+      const cmd = this.options.launcherCommand ?? 'java -jar "$HOME/headlessmc.jar"';
+      const exists = await this.hasSession();
+      if (exists) {
+        return { message: `Using existing tmux session ${this.options.sessionName}` };
+      }
 
-    await execFileAsync('tmux', ['new-session', '-d', '-s', this.options.sessionName, 'zsh', '-lc', cmd]);
-    return { message: `Launched detached tmux session ${this.options.sessionName}` };
+      await execFileAsync('tmux', ['new-session', '-d', '-s', this.options.sessionName, 'zsh', '-lc', cmd]);
+      return { message: `Launched detached tmux session ${this.options.sessionName}` };
+    });
   }
 
   async logs(lines = 30): Promise<RuntimeResult> {
@@ -73,43 +77,98 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   async connect(ip: string): Promise<RuntimeResult> {
-    const before = await this.capturePane(CONNECT_LOG_LINES);
-    await this.sendConsoleCommand(`connect ${ip}`);
-    const result = await this.waitForConnectResult(ip, before);
-    const hudHidden = await this.syncHudHiddenState();
-    return {
-      ...result,
-      meta: {
-        ...result.meta,
-        hudHidden,
-      },
-    };
+    return this.withRuntimeLock(async () => {
+      const before = await this.capturePane(CONNECT_LOG_LINES);
+      await this.sendConsoleCommand(`connect ${ip}`);
+      const result = await this.waitForConnectResult(ip, before);
+      const hudHidden = await this.syncHudHiddenState();
+      return {
+        ...result,
+        meta: {
+          ...result.meta,
+          hudHidden,
+        },
+      };
+    });
   }
 
   async viewAs(player: string): Promise<ScreenshotResult> {
-    await this.sendChatCommand('gamemode spectator');
-    await this.sendChatCommand(`spectate ${player}`);
-    return this.captureScreenshot();
+    return this.withRuntimeLock(async () => {
+      await this.sendChatCommand('gamemode spectator');
+      await this.sendChatCommand(`spectate ${player}`);
+      return this.captureScreenshot();
+    });
   }
 
   async viewAt(target: { x: number; y: number; z: number; yaw: number; pitch: number }): Promise<ScreenshotResult> {
-    const { x, y, z, yaw, pitch } = target;
-    await this.sendChatCommand('gamemode spectator');
-    await this.sendChatCommand(`tp @s ${x} ${y} ${z} ${yaw} ${pitch}`);
-    return this.captureScreenshot();
+    return this.withRuntimeLock(async () => {
+      const { x, y, z, yaw, pitch } = target;
+      await this.sendChatCommand('gamemode spectator');
+      await this.sendChatCommand(`tp @s ${x} ${y} ${z} ${yaw} ${pitch}`);
+      return this.captureScreenshot();
+    });
   }
 
   async command(command: string): Promise<RuntimeResult> {
-    const before = await this.capturePane(CONNECT_LOG_LINES);
+    return this.withRuntimeLock(() => this.executeCommand(command));
+  }
+
+  async key(key: string): Promise<RuntimeResult> {
+    return this.withRuntimeLock(() => this.executeKey(key));
+  }
+
+  async batchExecute(operations: BatchOperation[]): Promise<BatchResult> {
+    return this.withRuntimeLock(async () => {
+      const results: BatchResult['results'] = [];
+
+      for (const [index, operation] of operations.entries()) {
+        try {
+          const result =
+            operation.type === 'command'
+              ? await this.executeCommand(operation.command)
+              : await this.executeKey(operation.key);
+
+          results.push({
+            index,
+            type: operation.type,
+            ok: true,
+            message: result.message,
+            meta: result.meta,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          results.push({
+            index,
+            type: operation.type,
+            ok: false,
+            message,
+          });
+          return {
+            message: `Batch execution stopped at operation ${index}.`,
+            results,
+          };
+        }
+      }
+
+      return {
+        message: `Batch executed ${results.length} operations successfully.`,
+        results,
+      };
+    });
+  }
+
+  private async sendConsoleCommand(command: string): Promise<void> {
+    await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, command, 'C-m']);
+  }
+
+  private async executeCommand(command: string): Promise<RuntimeResult> {
     const sentCommand = command.startsWith('/') ? command : command.trim();
+    const commandOutput = await this.runCapturedConsoleCommand(sentCommand, {
+      timeoutMs: COMMAND_TIMEOUT_MS,
+      pollIntervalMs: COMMAND_POLL_INTERVAL_MS,
+      settleMs: COMMAND_SETTLE_MS,
+    });
 
-    if (command.startsWith('/')) {
-      await this.sendChatCommand(command.slice(1));
-    } else {
-      await this.sendConsoleCommand(command);
-    }
-
-    const commandOutput = await this.waitForCommandResult(before, sentCommand);
     return {
       message: commandOutput ? `Command result:\n${commandOutput}` : `Sent command: ${command}`,
       meta: {
@@ -119,51 +178,9 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     };
   }
 
-  async key(key: string): Promise<RuntimeResult> {
+  private async executeKey(key: string): Promise<RuntimeResult> {
     await this.pressKey(key);
     return { message: `Sent key: ${key}`, meta: { key } };
-  }
-
-  async batchExecute(operations: BatchOperation[]): Promise<BatchResult> {
-    const results: BatchResult['results'] = [];
-
-    for (const [index, operation] of operations.entries()) {
-      try {
-        const result =
-          operation.type === 'command'
-            ? await this.command(operation.command)
-            : await this.key(operation.key);
-
-        results.push({
-          index,
-          type: operation.type,
-          ok: true,
-          message: result.message,
-          meta: result.meta,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        results.push({
-          index,
-          type: operation.type,
-          ok: false,
-          message,
-        });
-        return {
-          message: `Batch execution stopped at operation ${index}.`,
-          results,
-        };
-      }
-    }
-
-    return {
-      message: `Batch executed ${results.length} operations successfully.`,
-      results,
-    };
-  }
-
-  private async sendConsoleCommand(command: string): Promise<void> {
-    await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, command, 'C-m']);
   }
 
   private async sendChatCommand(command: string): Promise<void> {
@@ -312,39 +329,28 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   private async captureRenderOutput(): Promise<string> {
-    const before = await this.capturePane(CONNECT_LOG_LINES);
-    await this.sendConsoleCommand('render');
-    const deadline = Date.now() + RENDER_TIMEOUT_MS;
-    let latest = before;
-
-    while (Date.now() < deadline) {
-      await sleep(RENDER_POLL_INTERVAL_MS);
-      latest = await this.capturePane(CONNECT_LOG_LINES);
-      const delta = stripSharedPrefix(before, latest);
-      const renderOutput = extractRenderOutput(delta);
-      if (renderOutput) {
-        return renderOutput;
-      }
+    const output = await this.runCapturedConsoleCommand('render', {
+      timeoutMs: RENDER_TIMEOUT_MS,
+      pollIntervalMs: RENDER_POLL_INTERVAL_MS,
+      settleMs: COMMAND_SETTLE_MS,
+    });
+    const renderOutput = extractRenderOutput(output);
+    if (renderOutput) {
+      return renderOutput;
     }
 
-    throw new Error(`Timed out waiting for render output. Recent output:\n${tailLines(latest, 20)}`);
+    throw new Error(`Timed out waiting for render output. Recent output:\n${tailLines(output, 20)}`);
   }
 
   private async waitForGuiClosed(): Promise<void> {
     const deadline = Date.now() + GUI_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
-      const before = await this.capturePane(CONNECT_LOG_LINES);
-      await this.sendConsoleCommand('gui');
-
-      await sleep(GUI_POLL_INTERVAL_MS);
-
-      const latest = await this.capturePane(CONNECT_LOG_LINES);
-      const delta = stripSharedPrefix(before, latest);
-      const guiOutput = extractCommandOutput(delta, 'gui');
-      if (!guiOutput) {
-        continue;
-      }
+      const guiOutput = await this.runCapturedConsoleCommand('gui', {
+        timeoutMs: GUI_TIMEOUT_MS,
+        pollIntervalMs: GUI_POLL_INTERVAL_MS,
+        settleMs: COMMAND_SETTLE_MS,
+      });
 
       if (guiOutput.includes('Minecraft is currently not displaying a Gui.')) {
         return;
@@ -354,31 +360,69 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     throw new Error('Timed out waiting for GUI to close.');
   }
 
-  private async waitForCommandResult(before: string, command: string): Promise<string> {
-    const deadline = Date.now() + COMMAND_TIMEOUT_MS;
-    let latest = before;
+  private async runCapturedConsoleCommand(
+    command: string,
+    options: { timeoutMs: number; pollIntervalMs: number; settleMs: number },
+  ): Promise<string> {
+    const startMarker = this.createMarker('start');
+    const endMarker = this.createMarker('end');
+    const deadline = Date.now() + options.timeoutMs;
     let bestOutput = '';
     let lastChangeAt = 0;
 
-    while (Date.now() < deadline) {
-      await sleep(COMMAND_POLL_INTERVAL_MS);
-      latest = await this.capturePane(CONNECT_LOG_LINES);
-      const delta = stripSharedPrefix(before, latest);
-      const commandOutput = extractCommandResult(delta, command);
-      if (commandOutput) {
-        if (commandOutput !== bestOutput) {
-          bestOutput = commandOutput;
-          lastChangeAt = Date.now();
-          continue;
-        }
+    await this.sendConsoleCommand(startMarker);
+    await this.sendConsoleCommand(command);
 
-        if (lastChangeAt > 0 && Date.now() - lastChangeAt >= COMMAND_SETTLE_MS) {
-          return bestOutput;
+    while (Date.now() < deadline) {
+      await sleep(options.pollIntervalMs);
+      const pane = await this.capturePane(CONNECT_LOG_LINES);
+      const block = extractBetweenMarkers(pane, startMarker);
+      const commandOutput = extractCommandPayload(block, command);
+      if (commandOutput !== bestOutput) {
+        bestOutput = commandOutput;
+        if (commandOutput) {
+          lastChangeAt = Date.now();
         }
+        continue;
+      }
+
+      if (commandOutput && lastChangeAt > 0 && Date.now() - lastChangeAt >= options.settleMs) {
+        break;
+      }
+    }
+
+    await this.sendConsoleCommand(endMarker);
+
+    while (Date.now() < deadline) {
+      await sleep(options.pollIntervalMs);
+      const pane = await this.capturePane(CONNECT_LOG_LINES);
+      const block = extractBetweenMarkers(pane, startMarker, endMarker);
+      if (block) {
+        return extractCommandPayload(block, command) || bestOutput;
       }
     }
 
     return bestOutput;
+  }
+
+  private createMarker(kind: 'start' | 'end'): string {
+    this.markerSequence += 1;
+    return `__hmc_${kind}_${Date.now()}_${this.markerSequence}__`;
+  }
+
+  private async withRuntimeLock<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.operationChain;
+    let release!: () => void;
+    this.operationChain = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 }
 
@@ -414,7 +458,7 @@ function tailLines(output: string, count: number): string {
 }
 
 function extractRenderOutput(output: string): string {
-  const lines = extractCommandOutput(output, 'render')
+  const lines = output
     .split('\n')
     .map((line) => line.trimEnd());
 
@@ -445,57 +489,42 @@ function hasHudMarker(renderOutput: string): boolean {
   return renderOutput.includes('XYZ:') || renderOutput.includes('Minecraft ');
 }
 
-function extractCommandOutput(output: string, command: string): string {
+function extractBetweenMarkers(output: string, startMarker: string, endMarker?: string): string {
   const lines = output
     .split('\n')
     .map((line) => line.trimEnd());
+  const startIndex = lines.findLastIndex((line) => line.includes(startMarker));
+  if (startIndex === -1) {
+    return '';
+  }
 
-  const commandIndex = lines.findLastIndex((line) => line.trim() === command);
+  const linesAfterStart = lines.slice(startIndex + 1);
+  if (!endMarker) {
+    return linesAfterStart.join('\n');
+  }
+
+  const endIndex = linesAfterStart.findIndex((line) => line.includes(endMarker));
+  if (endIndex === -1) {
+    return '';
+  }
+
+  return linesAfterStart.slice(0, endIndex).join('\n');
+}
+
+function extractCommandPayload(output: string, command: string): string {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trimEnd());
+  const commandIndex = lines.findIndex((line) => line.trim() === command);
   if (commandIndex === -1) {
     return '';
   }
 
-  return lines.slice(commandIndex + 1).join('\n');
-}
-
-function extractCommandResult(output: string, command: string): string {
-  const lines = extractCommandOutput(output, command)
-    .split('\n')
-    .map((line) => line.trimEnd());
-
-  const resultLines: string[] = [];
-  let started = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    if (!started) {
-      if (!trimmed) {
-        continue;
-      }
-      started = true;
-    }
-
-    if (looksLikeCommandEcho(trimmed)) {
-      break;
-    }
-
-    resultLines.push(line);
-  }
-
-  return resultLines.join('\n').trim();
-}
-
-function looksLikeCommandEcho(line: string): boolean {
-  if (!line) {
-    return false;
-  }
-
-  if (line.startsWith('/')) {
-    return true;
-  }
-
-  return /^(connect|disconnect|render|gui|close|help|click|text|menu|memory|login|msg|key)\b/.test(line);
+  return lines
+    .slice(commandIndex + 1)
+    .filter((line) => !line.includes('__hmc_'))
+    .join('\n')
+    .trim();
 }
 
 function sleep(ms: number): Promise<void> {

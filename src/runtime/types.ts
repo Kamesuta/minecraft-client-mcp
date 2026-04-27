@@ -12,7 +12,8 @@ export type RuntimeResult = {
 };
 
 export type BatchOperation =
-  | { type: 'command'; command: string };
+  | { type: 'player_command'; command: string }
+  | { type: 'headlessmc_command'; command: string };
 
 export type BatchResult = {
   message: string;

@@ -123,7 +123,10 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
       for (const [index, operation] of operations.entries()) {
         try {
-          const result = await this.executeHeadlessmcCommand(operation.command);
+          const result =
+            operation.type === 'player_command'
+              ? await this.executeMinecraftCommand(operation.command)
+              : await this.executeHeadlessmcCommand(operation.command);
 
           results.push({
             index,

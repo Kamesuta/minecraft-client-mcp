@@ -101,11 +101,14 @@ server.addTool({
 server.addTool({
   name: 'batch_execute',
   description:
-    'Execute multiple raw HeadlessMC commands in one call. Use hmc_player_command for player-run Minecraft commands.',
+    'Execute multiple player or HeadlessMC commands in one call with an explicit type for each operation.',
   parameters: z.object({
     operations: z
       .array(
-        z.discriminatedUnion('type', [z.object({ type: z.literal('command'), command: z.string().min(1) })]),
+        z.discriminatedUnion('type', [
+          z.object({ type: z.literal('player_command'), command: z.string().min(1) }),
+          z.object({ type: z.literal('headlessmc_command'), command: z.string().min(1) }),
+        ]),
       )
       .min(1)
       .max(25),

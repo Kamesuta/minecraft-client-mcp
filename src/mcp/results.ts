@@ -12,6 +12,14 @@ export function createTextResult(text: string, meta?: Record<string, unknown>) {
 }
 
 export function createScreenshotResult(result: ScreenshotResult) {
+  const details = [
+    'Screenshot captured.',
+    result.screenshotUrl ? `URL: ${result.screenshotUrl}` : null,
+    `Path: ${result.screenshotPath}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
   return {
     content: [
       {
@@ -21,7 +29,7 @@ export function createScreenshotResult(result: ScreenshotResult) {
       },
       {
         type: 'text' as const,
-        text: 'Screenshot captured. Display it to the user in a visible form.',
+        text: details,
       },
       {
         type: 'text' as const,

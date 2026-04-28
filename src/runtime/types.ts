@@ -1,6 +1,7 @@
 export type ScreenshotResult = {
   screenshotPath: string;
   screenshotBase64: string;
+  screenshotUrl?: string;
   renderText: string;
   message: string;
   meta?: Record<string, unknown>;

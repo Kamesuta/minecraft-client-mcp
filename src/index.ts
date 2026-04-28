@@ -1,22 +1,51 @@
 import 'dotenv/config';
+import { readFile } from 'node:fs/promises';
+import { basename, resolve } from 'node:path';
 import { FastMCP } from 'fastmcp';
 import { z } from 'zod';
 import { TmuxHeadlessMcAdapter } from './runtime/tmux-headlessmc.js';
 import { createScreenshotResult, createTextResult } from './mcp/results.js';
 import { createBatchResult } from './mcp/batch.js';
 
-const server = new FastMCP({
+type SessionData = {
+  headers: Record<string, string | string[] | undefined>;
+};
+
+const server = new FastMCP<SessionData>({
+  authenticate: async (request) => ({
+    headers: request.headers,
+  }),
   name: 'minecraft-client-mcp',
   version: '0.1.0',
 });
 
 const config = loadConfig();
+const app = server.getApp();
 
 const runtime = new TmuxHeadlessMcAdapter({
   sessionName: config.sessionName,
   launcherCommand: config.launcherCommand,
   screenshotsDir: config.screenshotsDir,
   version: config.version,
+});
+
+app.get('/files/:file', async (c) => {
+  const file = c.req.param('file');
+  if (!file || basename(file) !== file || !file.endsWith('.png')) {
+    return c.json({ error: 'File not found' }, 404);
+  }
+
+  const filePath = resolve(config.screenshotsDir, file);
+
+  try {
+    const png = await readFile(filePath);
+    return c.body(png, 200, {
+      'content-disposition': `inline; filename=${JSON.stringify(file)}`,
+      'content-type': 'image/png',
+    });
+  } catch {
+    return c.json({ error: 'File not found' }, 404);
+  }
 });
 
 server.addTool({
@@ -68,8 +97,9 @@ server.addTool({
   description:
     'Capture a screenshot while spectating a specific player.',
   parameters: z.object({ player: z.string().min(1) }),
-  execute: async ({ player }) => {
+  execute: async ({ player }, context) => {
     const result = await runtime.viewAs(player);
+    result.screenshotUrl = buildScreenshotUrl(context.session?.headers, result.screenshotPath);
     return createScreenshotResult(result);
   },
 });
@@ -85,8 +115,9 @@ server.addTool({
     yaw: z.number(),
     pitch: z.number(),
   }),
-  execute: async ({ x, y, z, yaw, pitch }) => {
+  execute: async ({ x, y, z, yaw, pitch }, context) => {
     const result = await runtime.viewAt({ x, y, z, yaw, pitch });
+    result.screenshotUrl = buildScreenshotUrl(context.session?.headers, result.screenshotPath);
     return createScreenshotResult(result);
   },
 });
@@ -174,4 +205,33 @@ function requireEnv(name: string): string {
   }
 
   return value;
+}
+
+function buildScreenshotUrl(
+  headers: Record<string, string | string[] | undefined> | undefined,
+  screenshotPath: string,
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+
+  const host = firstHeader(headers['x-forwarded-host']) ?? firstHeader(headers.host);
+  if (!host) {
+    return undefined;
+  }
+
+  const proto = firstHeader(headers['x-forwarded-proto']) ?? 'http';
+  const file = basename(screenshotPath);
+  return `${proto}://${host}/files/${encodeURIComponent(file)}`;
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return firstHeader(value[0]);
+  }
+
+  return value
+    ?.split(',')
+    .map((part) => part.trim())
+    .find(Boolean);
 }

@@ -31,6 +31,7 @@ const COMMAND_TIMEOUT_MS = 3_000;
 const COMMAND_POLL_INTERVAL_MS = 100;
 const COMMAND_SETTLE_MS = 300;
 const SPECTATE_TARGET_NOT_FOUND_PATTERNS = [/\bNo entity was found\b/i];
+const INGAME_REQUIRED_MESSAGE = 'You need to be ingame to send a command!';
 
 const CONNECT_SUCCESS_PATTERNS = [
   /\bjoined the game\b/i,
@@ -175,7 +176,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   async viewAs(player: string): Promise<ScreenshotResult> {
     return this.withRuntimeLock(async () => {
       await this.requireActiveSession();
-      await this.sendChatCommand('gamemode spectator');
+      await this.executeMinecraftCommand('gamemode spectator');
       const spectateOutput = await this.executeMinecraftCommand(`spectate ${player}`);
       const spectateFailure = findMatchingLine(
         String(spectateOutput.meta?.commandOutput ?? ''),
@@ -193,8 +194,8 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     return this.withRuntimeLock(async () => {
       await this.requireActiveSession();
       const { x, y, z, yaw, pitch } = target;
-      await this.sendChatCommand('gamemode spectator');
-      await this.sendChatCommand(`tp @s ${x} ${y} ${z} ${yaw} ${pitch}`);
+      await this.executeMinecraftCommand('gamemode spectator');
+      await this.executeMinecraftCommand(`tp @s ${x} ${y} ${z} ${yaw} ${pitch}`);
       return this.captureScreenshot();
     });
   }
@@ -360,7 +361,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   private async captureScreenshot(): Promise<ScreenshotResult> {
     const screenshotsDir = this.options.screenshotsDir;
     const before = await this.listScreenshotFiles(screenshotsDir);
-    await this.sendConsoleCommand('close');
+    await this.executeHeadlessmcCommand('close');
     await this.waitForGuiClosed();
     await this.ensureHudHidden();
     const renderText = await this.captureRenderOutput();
@@ -627,11 +628,19 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
       const pane = await this.capturePane(CONNECT_LOG_LINES);
       const block = extractBetweenMarkers(pane, startMarker, endMarker);
       if (block) {
-        return extractCommandPayload(block, command) || bestOutput;
+        return this.throwIfNotIngame(extractCommandPayload(block, command) || bestOutput);
       }
     }
 
-    return bestOutput;
+    return this.throwIfNotIngame(bestOutput);
+  }
+
+  private throwIfNotIngame(commandOutput: string): string {
+    if (!commandOutput.includes(INGAME_REQUIRED_MESSAGE)) {
+      return commandOutput;
+    }
+
+    throw new Error(INGAME_REQUIRED_MESSAGE);
   }
 
   private createMarker(kind: 'start' | 'end'): string {

@@ -15,7 +15,9 @@ export function createScreenshotResult(result: ScreenshotResult) {
   const details = [
     'Screenshot captured.',
     result.screenshotUrl ? `URL: ${result.screenshotUrl}` : null,
-    `Path: ${result.screenshotPath}`,
+    result.screenshotUrl
+      ? `Download with wget to a temporary folder: wget -P /tmp ${JSON.stringify(result.screenshotUrl)} and show it to the user.`
+      : null,
   ]
     .filter(Boolean)
     .join('\n');

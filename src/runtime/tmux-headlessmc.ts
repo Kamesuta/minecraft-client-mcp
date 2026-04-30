@@ -31,7 +31,7 @@ const COMMAND_TIMEOUT_MS = 3_000;
 const COMMAND_POLL_INTERVAL_MS = 100;
 const COMMAND_SETTLE_MS = 300;
 const SPECTATE_TARGET_NOT_FOUND_PATTERNS = [/\bNo entity was found\b/i];
-const INGAME_REQUIRED_MESSAGE = 'You need to be ingame to send a command!';
+const INGAME_REQUIRED_MESSAGE = 'You need to be ingame to send a command! Use hmc_connect to join a server first.';
 
 const CONNECT_SUCCESS_PATTERNS = [
   /\bjoined the game\b/i,

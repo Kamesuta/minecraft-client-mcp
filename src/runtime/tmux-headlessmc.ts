@@ -159,14 +159,19 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   async connect(ip: string): Promise<RuntimeResult> {
     return this.withRuntimeLock(async () => {
       await this.requireActiveSession();
+      const target = parseConnectTarget(ip);
       const before = await this.capturePane(CONNECT_LOG_LINES);
-      await this.sendConsoleCommand(`connect ${ip}`);
-      const result = await this.waitForConnectResult(ip, before);
+      await this.sendConsoleCommand(target.command);
+      const result = await this.waitForConnectResult(target.displayTarget, before);
       const hudHidden = await this.syncHudHiddenState();
       return {
         ...result,
         meta: {
           ...result.meta,
+          requestedTarget: ip,
+          host: target.host,
+          port: target.port,
+          sentCommand: target.command,
           hudHidden,
         },
       };
@@ -693,6 +698,64 @@ function tailLines(output: string, count: number): string {
     .filter(Boolean)
     .slice(-count)
     .join('\n');
+}
+
+function parseConnectTarget(input: string): {
+  command: string;
+  displayTarget: string;
+  host: string;
+  port: number | null;
+} {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error('Connection target cannot be empty.');
+  }
+
+  const bracketedIpv6Match = trimmed.match(/^\[(.+)\](?::(\d+))?$/);
+  if (bracketedIpv6Match) {
+    return buildConnectTarget(bracketedIpv6Match[1], bracketedIpv6Match[2], trimmed);
+  }
+
+  const colonCount = [...trimmed].filter((char) => char === ':').length;
+  if (colonCount === 1) {
+    const [host, port] = trimmed.split(':');
+    return buildConnectTarget(host, port, trimmed);
+  }
+
+  return buildConnectTarget(trimmed, undefined, trimmed);
+}
+
+function buildConnectTarget(host: string, portText: string | undefined, displayTarget: string): {
+  command: string;
+  displayTarget: string;
+  host: string;
+  port: number | null;
+} {
+  const normalizedHost = host.trim();
+  if (!normalizedHost) {
+    throw new Error(`Invalid connection target: ${displayTarget}`);
+  }
+
+  if (portText == null) {
+    return {
+      command: `connect ${normalizedHost}`,
+      displayTarget,
+      host: normalizedHost,
+      port: null,
+    };
+  }
+
+  const port = Number.parseInt(portText, 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid port in connection target: ${displayTarget}`);
+  }
+
+  return {
+    command: `connect ${normalizedHost} ${port}`,
+    displayTarget,
+    host: normalizedHost,
+    port,
+  };
 }
 
 function extractRenderOutput(output: string): string {

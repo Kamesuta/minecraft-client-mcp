@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { FastMCP } from 'fastmcp';
 import { z } from 'zod';
 import { TmuxHeadlessMcAdapter } from './runtime/tmux-headlessmc.js';
@@ -19,12 +20,14 @@ const server = new FastMCP<SessionData>({
   version: '0.1.0',
 });
 
+const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const config = loadConfig();
 const app = server.getApp();
 
 const runtime = new TmuxHeadlessMcAdapter({
   sessionName: config.sessionName,
   launcherCommand: config.launcherCommand,
+  workdir: config.workdir,
   screenshotsDir: config.screenshotsDir,
   version: config.version,
 });
@@ -178,6 +181,7 @@ function loadConfig(): {
   port: number;
   sessionName: string;
   launcherCommand: string;
+  workdir: string;
   screenshotsDir: string;
   version: string;
 } {
@@ -192,7 +196,8 @@ function loadConfig(): {
     host,
     port,
     sessionName: requireEnv('HMC_TMUX_SESSION'),
-    launcherCommand: requireEnv('HMC_LAUNCHER_COMMAND'),
+    launcherCommand: expandAppDir(requireEnv('HMC_LAUNCHER_COMMAND'), appDir),
+    workdir: requireEnv('HMC_WORKDIR'),
     screenshotsDir: requireEnv('HMC_SCREENSHOTS_DIR'),
     version: requireEnv('HMC_VERSION'),
   };
@@ -205,6 +210,12 @@ function requireEnv(name: string): string {
   }
 
   return value;
+}
+
+function expandAppDir(value: string, currentAppDir: string): string {
+  return value
+    .replaceAll('$APPDIR', currentAppDir)
+    .replaceAll('${APPDIR}', currentAppDir);
 }
 
 function buildScreenshotUrl(

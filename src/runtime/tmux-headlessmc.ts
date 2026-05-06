@@ -9,6 +9,7 @@ const execFileAsync = promisify(execFile);
 type Options = {
   sessionName: string;
   launcherCommand: string;
+  workdir: string;
   screenshotsDir: string;
   version: string;
 };
@@ -86,7 +87,17 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
       }
 
       const cmd = this.buildLauncherCommand(`launch ${version}`);
-      await execFileAsync('tmux', ['new-session', '-d', '-s', this.options.sessionName, 'zsh', '-c', cmd]);
+      await execFileAsync('tmux', [
+        'new-session',
+        '-d',
+        '-s',
+        this.options.sessionName,
+        '-c',
+        this.options.workdir,
+        'zsh',
+        '-c',
+        cmd,
+      ]);
       await sleep(100);
       const launchLogLine = await this.waitForLaunchResult(version, cmd);
       return {
@@ -94,6 +105,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
         meta: {
           sessionName: this.options.sessionName,
           version,
+          workdir: this.options.workdir,
           launcherCommand: cmd,
           matchedLine: launchLogLine,
         },

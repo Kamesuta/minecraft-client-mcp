@@ -46,11 +46,16 @@ MCP_HOST=127.0.0.1
 MCP_PORT=3000
 HMC_TMUX_SESSION=hmc
 HMC_VERSION=1.21.4
-HMC_LAUNCHER_COMMAND=java -jar "./headlessmc-launcher.jar"
+HMC_LAUNCHER_COMMAND=java -jar "$APPDIR/headlessmc-launcher.jar"
+HMC_WORKDIR=/Users/your-name
 HMC_SCREENSHOTS_DIR=/Users/your-name/Library/Application Support/minecraft/screenshots
 ```
 
 必要な環境変数は [.env.example](./.env.example) を参照してください。
+
+`HMC_WORKDIR` は HeadlessMC を起動するときの作業ディレクトリです。HeadlessMC はその配下に `HeadlessMC/` を作って利用するので、`HMC_WORKDIR=/Users/your-name` を指定すると `~/HeadlessMC` が使われます。
+
+`HMC_LAUNCHER_COMMAND` では `$APPDIR` と `${APPDIR}` が使えます。これはこの MCP サーバー側でアプリ自身のディレクトリに展開されるので、`HMC_WORKDIR` を別の場所にしていても jar のパスを簡単に書けます。
 
 ## ツール
 

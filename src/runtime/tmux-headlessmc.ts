@@ -58,11 +58,34 @@ const HEADLESSMC_READY_PATTERNS = [
   /\bHMC-Specifics initialized!\b/i,
   /\bHeadlessMc-CommandLine\b/i,
 ];
+const LOGIN_REQUIRED_PATTERNS = [
+  /You can't play the game without an account!/i,
+  /Please use the login command\./i,
+  /Go to https:\/\/www\.microsoft\.com\/link\?otc=([A-Z0-9]+)/i,
+  /Starting login process \d+, enter 'login -cancel \d+' to cancel the login process\./i,
+];
+const LAUNCH_FAILURE_PATTERNS = [
+  /\bCould not find Java \d+\b/i,
+  /\bFailed to download Java version \d+\b/i,
+  /\bCouldn't launch .*: .+/i,
+];
 const NON_FABRIC_PROGRESS_PATTERNS = [
   /\bSetting user:\b/i,
   /\bReloading ResourceManager:\b/i,
   /\bOpenAL initialized on device\b/i,
 ];
+
+class LoginRequiredLaunchError extends Error {
+  constructor(
+    message: string,
+    public readonly loginUrl?: string,
+    public readonly deviceCode?: string,
+    public readonly matchedLine?: string,
+  ) {
+    super(message);
+    this.name = 'LoginRequiredLaunchError';
+  }
+}
 
 export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   private hudHidden: boolean | null = null;
@@ -87,29 +110,56 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
       }
 
       const cmd = this.buildLauncherCommand(`launch ${version}`);
-      await execFileAsync('tmux', [
-        'new-session',
-        '-d',
-        '-s',
-        this.options.sessionName,
-        '-c',
-        this.options.workdir,
-        'zsh',
-        '-c',
-        cmd,
-      ]);
-      await sleep(100);
-      const launchLogLine = await this.waitForLaunchResult(version, cmd);
-      return {
-        message: `Launched detached tmux session ${this.options.sessionName} with HeadlessMC version ${version}.`,
-        meta: {
-          sessionName: this.options.sessionName,
-          version,
-          workdir: this.options.workdir,
-          launcherCommand: cmd,
-          matchedLine: launchLogLine,
-        },
-      };
+      try {
+        await execFileAsync('tmux', [
+          'new-session',
+          '-d',
+          '-s',
+          this.options.sessionName,
+          '-c',
+          this.options.workdir,
+          'zsh',
+          '-c',
+          cmd,
+        ]);
+        await sleep(100);
+        const launchLogLine = await this.waitForLaunchResult(version, cmd);
+        return {
+          message: `Launched detached tmux session ${this.options.sessionName} with HeadlessMC version ${version}.`,
+          meta: {
+            sessionName: this.options.sessionName,
+            version,
+            workdir: this.options.workdir,
+            launcherCommand: cmd,
+            matchedLine: launchLogLine,
+          },
+        };
+      } catch (error) {
+        if (error instanceof LoginRequiredLaunchError) {
+          await this.terminateSession();
+          return {
+            message: [
+              `HeadlessMC launch paused: Microsoft login is required for ${version}.`,
+              error.loginUrl ? `Open ${error.loginUrl} and enter code ${error.deviceCode}.` : null,
+              'After signing in, run hmc_launch again.',
+            ]
+              .filter(Boolean)
+              .join('\n'),
+            meta: {
+              sessionName: this.options.sessionName,
+              version,
+              workdir: this.options.workdir,
+              launcherCommand: cmd,
+              status: 'login_required',
+              loginUrl: error.loginUrl,
+              deviceCode: error.deviceCode,
+              matchedLine: error.matchedLine,
+            },
+          };
+        }
+
+        throw error;
+      }
     });
   }
 
@@ -438,12 +488,45 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
         latest = await this.capturePane(CONNECT_LOG_LINES);
       } catch (error) {
         if (!(await this.hasSession())) {
+          latest = await this.loadLaunchDiagnostics(latest);
+          const loginRequiredLine = findMatchingLine(latest, LOGIN_REQUIRED_PATTERNS);
+          if (loginRequiredLine) {
+            const loginUrlMatch = loginRequiredLine.match(/https:\/\/www\.microsoft\.com\/link\?otc=([A-Z0-9]+)/i);
+            const deviceCode = loginUrlMatch?.[1];
+            const loginUrl = deviceCode ? `https://www.microsoft.com/link?otc=${deviceCode}` : undefined;
+            throw new LoginRequiredLaunchError(
+              [
+                `HeadlessMC requires Microsoft login for version ${version}.`,
+                loginUrl ? `Open ${loginUrl} and enter code ${deviceCode}.` : null,
+                `Tried launcher command: ${launcherCommand}`,
+                `Matched log line: ${loginRequiredLine}`,
+              ]
+                .filter(Boolean)
+                .join('\n'),
+              loginUrl,
+              deviceCode,
+              loginRequiredLine,
+            );
+          }
+
+          const launchFailureLine = findMatchingLine(latest, LAUNCH_FAILURE_PATTERNS);
+          if (launchFailureLine) {
+            throw new Error(
+              [
+                `HeadlessMC session ${this.options.sessionName} exited before startup completed for version ${version}.`,
+                `Tried launcher command: ${launcherCommand}`,
+                `Matched log line: ${launchFailureLine}`,
+                `Recent log output:\n${tailLines(latest, 20) || '(no output)'}`,
+              ].join('\n'),
+            );
+          }
+
           throw new Error(
             [
               `HeadlessMC session ${this.options.sessionName} exited before startup completed for version ${version}.`,
               `Tried launcher command: ${launcherCommand}`,
               'The process likely failed immediately before Minecraft finished loading.',
-              'Check the jar path, Java runtime, account/auth state, and whether that version ID is launchable.',
+              `Recent log output:\n${tailLines(latest, 20) || '(no output)'}`,
             ].join('\n'),
           );
         }
@@ -452,6 +535,25 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
       }
 
       fabricMatchedLine ??= findMatchingLine(latest, FABRIC_LAUNCH_PATTERNS);
+      const loginRequiredLine = findMatchingLine(latest, LOGIN_REQUIRED_PATTERNS);
+      if (loginRequiredLine) {
+        const loginUrlMatch = loginRequiredLine.match(/https:\/\/www\.microsoft\.com\/link\?otc=([A-Z0-9]+)/i);
+        const deviceCode = loginUrlMatch?.[1];
+        const loginUrl = deviceCode ? `https://www.microsoft.com/link?otc=${deviceCode}` : undefined;
+        throw new LoginRequiredLaunchError(
+          [
+            `HeadlessMC requires Microsoft login for version ${version}.`,
+            loginUrl ? `Open ${loginUrl} and enter code ${deviceCode}.` : null,
+            `Tried launcher command: ${launcherCommand}`,
+            `Matched log line: ${loginRequiredLine}`,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          loginUrl,
+          deviceCode,
+          loginRequiredLine,
+        );
+      }
       const successLine = findMatchingLine(latest, HEADLESSMC_READY_PATTERNS);
       if (successLine) {
         if (!fabricMatchedLine) {
@@ -506,6 +608,17 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     }
 
     this.hudHidden = null;
+  }
+
+  private async loadLaunchDiagnostics(fallback: string): Promise<string> {
+    const logPath = join(this.options.workdir, 'HeadlessMC', 'headlessmc.log');
+
+    try {
+      const output = await readFile(logPath, 'utf8');
+      return output || fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   private async listScreenshotFiles(screenshotsDir: string): Promise<Map<string, number>> {

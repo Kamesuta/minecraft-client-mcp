@@ -109,6 +109,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
         };
       }
 
+      await this.ensureBundledJavaExecutablePermissions();
       const cmd = this.buildLauncherCommand(`launch ${version}`);
       try {
         await execFileAsync('tmux', [
@@ -161,6 +162,27 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
         throw error;
       }
     });
+  }
+
+  private async ensureBundledJavaExecutablePermissions(): Promise<void> {
+    const javaRoot = join(this.options.workdir, 'HeadlessMC', 'java');
+
+    try {
+      await execFileAsync('find', [
+        javaRoot,
+        '-type',
+        'f',
+        '-path',
+        '*/bin/java',
+        '-exec',
+        'chmod',
+        '755',
+        '{}',
+        '+',
+      ]);
+    } catch {
+      // Ignore missing directories and let HeadlessMC report any real Java discovery failures.
+    }
   }
 
   async quit(): Promise<RuntimeResult> {

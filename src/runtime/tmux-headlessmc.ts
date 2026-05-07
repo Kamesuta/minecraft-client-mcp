@@ -111,6 +111,10 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
 
       await this.ensureBundledJavaExecutablePermissions();
       const cmd = this.buildLauncherCommand(`launch ${version}`);
+      const launchDiagnosticsBefore = await this.loadLaunchDiagnostics('');
+      const tmuxLaunchEnv = { ...process.env };
+      delete tmuxLaunchEnv.TMUX;
+      delete tmuxLaunchEnv.TMUX_PANE;
       try {
         await execFileAsync('tmux', [
           'new-session',
@@ -119,12 +123,14 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
           this.options.sessionName,
           '-c',
           this.options.workdir,
-          'zsh',
-          '-c',
-          cmd,
-        ]);
+        ], {
+          env: tmuxLaunchEnv,
+        });
         await sleep(100);
-        const launchLogLine = await this.waitForLaunchResult(version, cmd);
+        await execFileAsync('tmux', ['send-keys', '-l', '-t', `${this.options.sessionName}:0`, cmd]);
+        await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, 'C-m']);
+        await sleep(100);
+        const launchLogLine = await this.waitForLaunchResult(version, cmd, launchDiagnosticsBefore);
         return {
           message: `Launched detached tmux session ${this.options.sessionName} with HeadlessMC version ${version}.`,
           meta: {
@@ -345,7 +351,8 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
   }
 
   private async sendConsoleCommand(command: string): Promise<void> {
-    await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, command, 'C-m']);
+    await execFileAsync('tmux', ['send-keys', '-l', '-t', `${this.options.sessionName}:0`, command]);
+    await execFileAsync('tmux', ['send-keys', '-t', `${this.options.sessionName}:0`, 'C-m']);
   }
 
   private async executeMinecraftCommand(command: string): Promise<RuntimeResult> {
@@ -499,9 +506,14 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     );
   }
 
-  private async waitForLaunchResult(version: string, launcherCommand: string): Promise<string> {
+  private async waitForLaunchResult(
+    version: string,
+    launcherCommand: string,
+    launchDiagnosticsBefore: string,
+  ): Promise<string> {
     const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
     let latest = '';
+    let logDelta = '';
     let fabricMatchedLine: string | null = null;
 
     while (Date.now() < deadline) {
@@ -509,9 +521,20 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
       try {
         latest = await this.capturePane(CONNECT_LOG_LINES);
       } catch (error) {
+        logDelta = stripSharedPrefix(
+          launchDiagnosticsBefore,
+          await this.loadLaunchDiagnostics(logDelta),
+        );
+        const combinedOutput = joinNonEmptyOutput(latest, logDelta);
+        fabricMatchedLine ??= findMatchingLine(combinedOutput, FABRIC_LAUNCH_PATTERNS);
+        const successLine = findMatchingLine(combinedOutput, HEADLESSMC_READY_PATTERNS);
+        if (successLine && fabricMatchedLine) {
+          return successLine;
+        }
+
         if (!(await this.hasSession())) {
-          latest = await this.loadLaunchDiagnostics(latest);
-          const loginRequiredLine = findMatchingLine(latest, LOGIN_REQUIRED_PATTERNS);
+          latest = combinedOutput;
+          const loginRequiredLine = findMatchingLine(combinedOutput, LOGIN_REQUIRED_PATTERNS);
           if (loginRequiredLine) {
             const loginUrlMatch = loginRequiredLine.match(/https:\/\/www\.microsoft\.com\/link\?otc=([A-Z0-9]+)/i);
             const deviceCode = loginUrlMatch?.[1];
@@ -531,14 +554,14 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
             );
           }
 
-          const launchFailureLine = findMatchingLine(latest, LAUNCH_FAILURE_PATTERNS);
+          const launchFailureLine = findMatchingLine(combinedOutput, LAUNCH_FAILURE_PATTERNS);
           if (launchFailureLine) {
             throw new Error(
               [
                 `HeadlessMC session ${this.options.sessionName} exited before startup completed for version ${version}.`,
                 `Tried launcher command: ${launcherCommand}`,
                 `Matched log line: ${launchFailureLine}`,
-                `Recent log output:\n${tailLines(latest, 20) || '(no output)'}`,
+                `Recent log output:\n${tailLines(combinedOutput, 20) || '(no output)'}`,
               ].join('\n'),
             );
           }
@@ -548,7 +571,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
               `HeadlessMC session ${this.options.sessionName} exited before startup completed for version ${version}.`,
               `Tried launcher command: ${launcherCommand}`,
               'The process likely failed immediately before Minecraft finished loading.',
-              `Recent log output:\n${tailLines(latest, 20) || '(no output)'}`,
+              `Recent log output:\n${tailLines(combinedOutput, 20) || '(no output)'}`,
             ].join('\n'),
           );
         }
@@ -556,8 +579,13 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
         throw error;
       }
 
-      fabricMatchedLine ??= findMatchingLine(latest, FABRIC_LAUNCH_PATTERNS);
-      const loginRequiredLine = findMatchingLine(latest, LOGIN_REQUIRED_PATTERNS);
+      logDelta = stripSharedPrefix(
+        launchDiagnosticsBefore,
+        await this.loadLaunchDiagnostics(logDelta),
+      );
+      const combinedOutput = joinNonEmptyOutput(latest, logDelta);
+      fabricMatchedLine ??= findMatchingLine(combinedOutput, FABRIC_LAUNCH_PATTERNS);
+      const loginRequiredLine = findMatchingLine(combinedOutput, LOGIN_REQUIRED_PATTERNS);
       if (loginRequiredLine) {
         const loginUrlMatch = loginRequiredLine.match(/https:\/\/www\.microsoft\.com\/link\?otc=([A-Z0-9]+)/i);
         const deviceCode = loginUrlMatch?.[1];
@@ -576,7 +604,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
           loginRequiredLine,
         );
       }
-      const successLine = findMatchingLine(latest, HEADLESSMC_READY_PATTERNS);
+      const successLine = findMatchingLine(combinedOutput, HEADLESSMC_READY_PATTERNS);
       if (successLine) {
         if (!fabricMatchedLine) {
           await this.terminateSession();
@@ -592,7 +620,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
         return successLine;
       }
 
-      const incompatibleLine = findMatchingLine(latest, NON_FABRIC_PROGRESS_PATTERNS);
+      const incompatibleLine = findMatchingLine(combinedOutput, NON_FABRIC_PROGRESS_PATTERNS);
       if (incompatibleLine && !fabricMatchedLine) {
         await this.terminateSession();
         throw new Error(
@@ -607,7 +635,7 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
     }
 
     throw new Error(
-      `Timed out waiting for HeadlessMC launch ${version}. Recent output:\n${tailLines(latest, 20) || '(no output)'}`,
+      `Timed out waiting for HeadlessMC launch ${version}. Recent output:\n${tailLines(joinNonEmptyOutput(latest, logDelta), 20) || '(no output)'}`,
     );
   }
 
@@ -822,6 +850,13 @@ function stripSharedPrefix(previous: string, current: string): string {
   }
 
   return current;
+}
+
+function joinNonEmptyOutput(...chunks: string[]): string {
+  return chunks
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .join('\n');
 }
 
 function findMatchingLine(output: string, patterns: RegExp[]): string | null {

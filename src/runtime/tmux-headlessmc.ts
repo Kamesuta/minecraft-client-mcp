@@ -749,6 +749,10 @@ export class TmuxHeadlessMcAdapter implements MinecraftClientRuntime {
       return renderOutput;
     }
 
+    if (!output.trim()) {
+      return '';
+    }
+
     throw new Error(`Timed out waiting for render output. Recent output:\n${tailLines(output, 20)}`);
   }
 
